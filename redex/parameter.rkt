@@ -1,0 +1,404 @@
+#lang racket/base
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(provide define-extended-reduction-relation
+         define-reduction-relation
+         define-extended-metafunction
+         define-extended-judgment)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(require redex/reduction-semantics
+         racket/stxparam
+         (only-in redex/private/struct empty-reduction-relation)
+         (only-in redex/private/judgment-form
+                  judgment-form-id?
+                  lookup-judgment-form-id)
+         (for-syntax racket/base
+                     racket/sequence
+                     racket/syntax
+                     racket/function
+                     racket/list
+                     racket/match
+                     syntax/parse
+                     syntax/id-set
+                     syntax/id-table
+                     syntax/strip-context
+                     (only-in redex/private/term-fn
+                              judgment-form-mode)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Reduction relation transformer
+
+(begin-for-syntax
+  ;; Reduction relation transformer struct. Contains the transformer itself
+  ;; as well as a field containing the parameters.
+  (struct rr-transformer (parameters transformer) #:property prop:procedure 1)
+
+  ;; Returns the parameters of a reduction relation transformer.
+  (define (get-params rr)
+    (rr-transformer-parameters (syntax-local-value rr)))
+
+  ;; A parameter scope allows us to shadow existing uses of metafunctions and
+  ;; judgments in a definition. When we add the scope, uses are redirecetd to the
+  ;; syntax parameter instead of the original definition.
+  (define param-scope
+    (make-syntax-introducer))
+
+  ;; Adds given scope to all elements in a syntax list
+  (define (add-scope-to-all introducer stxs)
+    (for/list ([stx (in-syntax stxs)])
+      (introducer stx 'add)))
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Parameter extensions
+
+(begin-for-syntax
+  (define extension-table (make-free-id-table))
+
+  (define (record-extension! base lang name)
+    (define lang-table
+      (free-id-table-ref! extension-table base make-free-id-table))
+    (free-id-table-set! lang-table lang name))
+
+  (define (lookup-extension base lang)
+    (define lang-table
+      (free-id-table-ref extension-table base (λ () #f)))
+    (and lang-table (free-id-table-ref lang-table lang (λ () #f))))
+
+  (define (extended-params base lang)
+    (define params (get-params base))
+    (map syntax-local-introduce
+         (filter-map (λ (param)
+                       (lookup-extension param lang))
+                     params)))
+
+  (define (inherited-params base lang)
+    (define params (get-params base))
+    (filter (λ (param)
+              (not (lookup-extension param lang)))
+            params))
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Lifts
+
+(begin-for-syntax
+  ;; Mutable table that maps language identifiers to a scope that is used to
+  ;; distinguish multiple definitions of a base metafunction or judgment.
+  (define language-scopes
+    (make-free-id-table))
+
+  ;; Given a language and a piece of syntax, attach an existing language scope
+  ;; if it exists, or create a new language scope.
+  (define (add-language-scope lang stx)
+    (define introducer
+      (free-id-table-ref! language-scopes lang make-syntax-introducer))
+    (introducer stx 'add))
+
+  (define-syntax-class metafunction
+    (pattern (_ base:id lang:id name:id : rest ...))
+    (pattern (_ base:id lang:id [(name:id _ ...) _ ...] _ ...)))
+
+  (define (lift-metafunction mf lang)
+    (define mf* (add-language-scope lang mf))
+    #`(define-metafunction/extension
+        #,mf
+        #,lang
+        #,mf* : any (... ...) -> any))
+
+  (define (lift-judgment jf lang)
+    (define jf* (add-language-scope lang jf))
+    (define mode
+      (judgment-form-mode (lookup-judgment-form-id jf)))
+    #`(define-extended-judgment-form
+        #,lang
+        #,jf
+        #:mode (#,jf* #,@mode)))
+
+  (define (lift-parameters lang params)
+    (for/list ([param (in-syntax params)])
+      (cond
+        [(judgment-form-id? param) (lift-judgment param lang)]
+        [else (lift-metafunction param lang)])))
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Binding syntax class
+
+(begin-for-syntax
+  ;; Syntax class for binding set when applying a reduction relation for
+  ;; parameterization. The bindings returned are what are used for the syntax
+  ;; parameterization.
+  (define-splicing-syntax-class (bindings base lang params rr-bindings base-bindings)
+    ;; Explicit parameterization
+    (pattern
+     (~seq [-x -y] ...)
+     #:fail-when
+     (check-duplicate-identifier (syntax->list #'(-x ...)))
+     "duplicate parameter"
+     #:fail-when
+     (check-valid-parameter params #'(-x ...))
+     "invalid parameter"
+     #:with ([x* x y] ...)
+     (process-params rr-bindings lang #'(-x ...) #'(-y ...))
+     #:with ([base-x* base-x base-y] ...)
+     (process-params base-bindings lang #'(-x ...) #'(-y ...))))
+
+  ;; If we attempt to parameterize a reduction relation, make sure that it's
+  ;; valid (i.e. we originally defined the relation with those parameters).
+  (define (check-valid-parameter params xs)
+    (define param-set
+      (immutable-free-id-set (syntax->list params)))
+    (for/first ([x (in-syntax xs)]
+                #:when (not (free-id-set-member? param-set x)))
+      x))
+
+  ;; Adds the appropriate scopes to the parameters.
+  (define (pre-process-params params lang)
+    (for/list ([x (in-syntax params)])
+      (define y-extended (lookup-extension x lang))
+      (define y-lifted (add-language-scope lang x))
+      (list x
+            (param-scope x 'add)
+            (or y-extended y-lifted))))
+
+  ;; Adds the appropriate scopes to the parameters.
+  (define (process-params bindings lang xs ys)
+    (define explicit-table
+      (make-free-id-table (map cons (syntax->list xs) (syntax->list ys))))
+    (for/list ([binding (in-syntax bindings)])
+      (match-define (list x* x y) (syntax->list binding))
+      (define y-explicit
+        (or (free-id-table-ref explicit-table x* (λ () #f))
+            (free-id-table-ref explicit-table y (λ () #f))))
+      (list x* x (or y-explicit y))))
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Reduction relation transformer
+
+(begin-for-syntax
+  (define (make-rr-transformer name base lang more params rr-bindings base-bindings)
+    (rr-transformer
+     (syntax->list params)
+     (syntax-parser
+       [x:id #`(x)]
+       [(_ ?bs)
+        #:declare ?bs (bindings base lang params rr-bindings base-bindings)
+        #`(syntax-parameterize
+              ([?bs.x (make-rename-transformer #'?bs.y)]
+               ...)
+            (extend-reduction-relation
+             (#,base [?bs.base-x* ?bs.base-y] ...)
+             #,lang
+             #,@(add-scope-to-all param-scope more)))])))
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Reduction relation
+
+;; Returns syntax that defines a base reduction relation.
+(define-syntax (define-extended-reduction-relation stx)
+  (syntax-parse stx
+    [(_ ?name:id ?base:id ?lang:id
+        #:parameters (?explicit-param:id ...) ?more ...)
+     #:with (?extended-param ...) (extended-params #'?base #'?lang)
+     #:with (?inherited-param ...) (inherited-params #'?base #'?lang)
+     #:with (?new-param ...) #'(?extended-param ... ?explicit-param ...)
+     #:with (?new-param* ...) (add-scope-to-all param-scope #'(?new-param ...))
+     #:with (?params ...) #'(?new-param ... ?inherited-param ...)
+     #:with (?rr-binding ...) (pre-process-params #'(?params ...) #'?lang)
+     #:with (?base-binding ...) (pre-process-params (get-params #'?base) #'?lang)
+     #`(begin
+         (define-rename-transformer-parameter ?new-param*
+             (make-rename-transformer #'?new-param))
+         ...
+         #,@(lift-parameters #'?lang #'(?params ...))
+         (define-syntax ?name
+           (make-rr-transformer
+            #'?name #'?base #'?lang
+            #'((... ...) (?more ...))
+            #'(?params ...)
+            #'(?rr-binding ...)
+            #'(?base-binding ...))))]
+    [(_ ?name:id ?base:id ?lang:id ?more ...)
+     #'(define-extended-reduction-relation
+         ?name ?base ?lang #:parameters ()
+         ?more ...)]))
+
+(define-syntax (define-reduction-relation stx)
+  (syntax-parse stx
+    [(_ ?name:id ?lang:id #:parameters (?new-param:id ...) ?more ...)
+     #:with ?base (gensym)
+     #'(begin
+         (define-syntax ?base
+           (rr-transformer (list) (λ _ #'empty-reduction-relation)))
+         (define-extended-reduction-relation ?name ?base ?lang
+           #:parameters (?new-param ...) ?more ...))]
+    [(_ ?name:id ?lang:id ?more ...)
+     #'(define-reduction-relation ?name ?lang #:parameters () ?more ...)]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Defining extensions
+
+(define-syntax (define-extended-metafunction stx)
+  (syntax-parse stx
+    [(~and ?mf:metafunction (_ ?all ...))
+     #'(begin
+         (define-metafunction/extension ?all ...)
+         (begin-for-syntax
+           (record-extension! #'?mf.base #'?mf.lang #'?mf.name)))]))
+
+(define-syntax (define-extended-judgment stx)
+  (syntax-parse stx
+    [(_ ?base:id ?lang:id #:mode (?name:id ?modes ...) ?more ...)
+     #'(begin
+         (define-extended-judgment-form ?lang ?base
+           #:mode (?name ?modes ...)
+           ?more ...)
+         (begin-for-syntax
+           (record-extension! #'?base #'?lang #'?name)))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Tests
+
+(module+ test
+  (require rackunit
+           syntax/macro-testing
+           racket/set)
+
+  (define (apply-rr . xs)
+    (apply set (apply apply-reduction-relation xs)))
+
+  ;; the base language L0
+
+  (define-language L0
+    [m ::= number])
+
+  (define-metafunction L0
+    [(foo-mf m) 1])
+
+  (define-judgment-form L0
+    #:mode (foo-jf I O)
+    [(foo-jf m 1)])
+
+  (define-reduction-relation r0-mf
+    L0
+    #:parameters (foo-mf)
+    [--> m (foo-mf m)])
+
+  (define-reduction-relation r0-jf
+    L0
+    #:parameters (foo-jf)
+    [--> m_1 m_2 (judgment-holds (foo-jf m_1 m_2))])
+
+  (test-case "Normal functioning."
+    (check-equal? (apply-rr r0-mf (term 0)) (set 1))
+    (check-equal? (apply-rr r0-jf (term 0)) (set 1)))
+
+  (define-metafunction L0
+    [(bar-mf m) 2])
+
+  (define-judgment-form L0
+    #:mode (bar-jf I O)
+    [(bar-jf m 2)])
+
+  (test-case "Explicit parameterization."
+    (check-equal? (apply-rr (r0-mf [foo-mf bar-mf]) (term 0)) (set 2))
+    (check-equal? (apply-rr (r0-jf [foo-jf bar-jf]) (term 0)) (set 2)))
+
+  (test-case "Explicit parameterization failures."
+    (check-exn
+     #rx"invalid parameter"
+     (λ () (convert-syntax-error (apply-rr (r0-mf [oops-mf bar-mf]) (term 0)))))
+
+    (check-exn
+     #rx"duplicate parameter"
+     (λ ()
+       (convert-syntax-error (apply-rr (r0-mf [foo-mf bar-mf]
+                                              [foo-mf bar-mf])
+                                       (term 0))))))
+
+  (define-extended-language L1 L0
+    [m ::= .... string])
+
+  (define-extended-reduction-relation r1-mf
+    r0-mf L1
+    [--> m 13])
+
+  (define-extended-reduction-relation r1-jf
+    r0-jf L1
+    [--> m 13])
+
+  (test-case "Normal extension."
+    (check-equal? (apply-rr r1-mf (term 0)) (set 1 13))
+    (check-equal? (apply-rr r1-jf (term 0)) (set 1 13)))
+
+  (test-case "Extension with implicit lifting."
+    (check-equal? (apply-rr r1-mf (term "hi")) (set 1 13))
+    (check-equal? (apply-rr r1-jf (term "hi")) (set 1 13)))
+
+  (test-case "Explicit parameterization of an extension."
+    (check-equal? (apply-rr (r1-mf [foo-mf bar-mf]) (term 0)) (set 2 13))
+    (check-equal? (apply-rr (r1-jf [foo-jf bar-jf]) (term 0)) (set 2 13)))
+
+  (define-metafunction L1
+    [(foo-mf* m) 3])
+
+  (define-judgment-form L1
+    #:mode (foo-jf* I O)
+    [(foo-jf* m 3)])
+
+  (define-extended-reduction-relation r1-mf*
+    r0-mf L1 #:parameters (foo-mf*)
+    [--> m (foo-mf* m)])
+
+  (define-extended-reduction-relation r1-jf*
+    r0-jf L1 #:parameters (foo-jf*)
+    [--> m_1 m_2 (judgment-holds (foo-jf* m_1 m_2))])
+
+  (test-case "Normal extension with new parameter."
+    (check-equal? (apply-rr r1-mf* (term 0)) (set 1 3))
+    (check-equal? (apply-rr r1-jf* (term 0)) (set 1 3)))
+
+  (test-case "Explicit parameterization of an new parameter."
+    (check-equal? (apply-rr (r1-mf* [foo-mf* bar-mf]) (term 0)) (set 1 2))
+    (check-equal? (apply-rr (r1-jf* [foo-jf* bar-jf]) (term 0)) (set 1 2))
+    (check-equal? (apply-rr (r1-mf* [foo-mf bar-mf] [foo-mf* bar-mf]) (term 0))
+                  (set 2))
+    (check-equal? (apply-rr (r1-jf* [foo-jf bar-jf] [foo-jf* bar-jf]) (term 0))
+                  (set 2)))
+
+  (define-extended-metafunction foo-mf L1
+    [(foo-mf** m) 4])
+
+  (define-extended-judgment foo-jf L1
+    #:mode (foo-jf** I O)
+      [(foo-jf** m 4)])
+
+  (define-extended-reduction-relation r1-mf**
+    r0-mf L1
+    [--> m (foo-mf** m)])
+
+  (define-extended-reduction-relation r1-jf**
+    r0-jf L1
+    [--> m_1 m_2 (judgment-holds (foo-jf** m_1 m_2))])
+
+  (test-case "Normal extension with parameter from extension."
+    (check-equal? (apply-rr r1-mf** (term 0)) (set 4))
+    (check-equal? (apply-rr r1-jf** (term 0)) (set 1 4)))
+
+  (test-case "Explicit parameterization with old name."
+    (check-exn
+     #rx"invalid parameter"
+     (λ () (convert-syntax-error
+            (apply-rr (r1-mf** [foo-mf bar-mf]) (term 0))))))
+
+  (test-case "Explicit parameterization with parameter from extension."
+    (check-equal? (apply-rr (r1-mf** [foo-mf** bar-mf]) (term 0)) (set 2))
+    (check-equal? (apply-rr (r1-jf** [foo-jf** bar-jf]) (term 0)) (set 2)))
+
+  )
