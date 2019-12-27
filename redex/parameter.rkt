@@ -163,20 +163,18 @@
     (for/list ([x (in-syntax params)])
       (define y-extended (lookup-extension x lang))
       (define y-lifted (add-language-scope lang x))
-      (list x
-            (param-scope x 'add)
-            (or y-extended y-lifted))))
+      (list x (or y-extended y-lifted))))
 
   ;; Adds the appropriate scopes to the parameters.
   (define (process-params bindings lang xs ys)
     (define explicit-table
       (make-free-id-table (map cons (syntax->list xs) (syntax->list ys))))
     (for/list ([binding (in-syntax bindings)])
-      (match-define (list x* x y) (syntax->list binding))
+      (match-define (list x y) (syntax->list binding))
       (define y-explicit
-        (or (free-id-table-ref explicit-table x* (λ () #f))
+        (or (free-id-table-ref explicit-table x (λ () #f))
             (free-id-table-ref explicit-table y (λ () #f))))
-      (list x* x (or y-explicit y))))
+      (list x (param-scope x 'add) (or y-explicit y))))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
