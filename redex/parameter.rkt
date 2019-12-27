@@ -10,7 +10,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (require redex/reduction-semantics
-         racket/stxparam
          (only-in redex/private/struct empty-reduction-relation)
          (only-in redex/private/judgment-form
                   judgment-form-id?
@@ -27,6 +26,13 @@
                      syntax/strip-context
                      (only-in redex/private/term-fn
                               judgment-form-mode)))
+
+
+(begin-for-syntax
+  (require debug-scopes)
+  (define (p stx)
+    (displayln (+scopes stx))
+    stx))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Reduction relation transformer
@@ -135,17 +141,13 @@
   (define-splicing-syntax-class (bindings base lang params rr-bindings base-bindings)
     ;; Explicit parameterization
     (pattern
-     (~seq [-x -y] ...)
+     (~seq [x y] ...)
      #:fail-when
-     (check-duplicate-identifier (syntax->list #'(-x ...)))
+     (check-duplicate-identifier (syntax->list #'(x ...)))
      "duplicate parameter"
      #:fail-when
-     (check-valid-parameter params #'(-x ...))
-     "invalid parameter"
-     #:with ([x* x y] ...)
-     (process-params rr-bindings lang #'(-x ...) #'(-y ...))
-     #:with ([base-x* base-x base-y] ...)
-     (process-params base-bindings lang #'(-x ...) #'(-y ...))))
+     (check-valid-parameter params #'(x ...))
+     "invalid parameter"))
 
   ;; If we attempt to parameterize a reduction relation, make sure that it's
   ;; valid (i.e. we originally defined the relation with those parameters).
@@ -188,11 +190,16 @@
        [x:id #`(x)]
        [(_ ?bs)
         #:declare ?bs (bindings base lang params rr-bindings base-bindings)
-        #`(syntax-parameterize
-              ([?bs.x (make-rename-transformer #'?bs.y)]
+        #:with ([_ ?x ?y] ...)
+        (process-params rr-bindings lang #'(?bs.x ...) #'(?bs.y ...))
+        #:with ([?base-x* _ ?base-y] ...)
+        (process-params base-bindings lang #'(?bs.x ...) #'(?bs.y ...))
+        #`(let-syntax
+              ([?x (make-rename-transformer #'?y)]
                ...)
+            #,@(lift-parameters lang params)
             (extend-reduction-relation
-             (#,base [?bs.base-x* ?bs.base-y] ...)
+             (#,base [?base-x* ?base-y] ...)
              #,lang
              #,@(add-scope-to-all param-scope more)))])))
   )
@@ -208,20 +215,15 @@
      #:with (?extended-param ...) (extended-params #'?base #'?lang)
      #:with (?inherited-param ...) (inherited-params #'?base #'?lang)
      #:with (?new-param ...) #'(?extended-param ... ?explicit-param ...)
-     #:with (?new-param* ...) (add-scope-to-all param-scope #'(?new-param ...))
-     #:with (?params ...) #'(?new-param ... ?inherited-param ...)
-     #:with (?rr-binding ...) (pre-process-params #'(?params ...) #'?lang)
+     #:with (?param ...) #'(?new-param ... ?inherited-param ...)
+     #:with (?rr-binding ...) (pre-process-params #'(?param ...) #'?lang)
      #:with (?base-binding ...) (pre-process-params (get-params #'?base) #'?lang)
      #`(begin
-         (define-rename-transformer-parameter ?new-param*
-             (make-rename-transformer #'?new-param))
-         ...
-         #,@(lift-parameters #'?lang #'(?params ...))
          (define-syntax ?name
            (make-rr-transformer
             #'?name #'?base #'?lang
             #'((... ...) (?more ...))
-            #'(?params ...)
+            #'(?param ...)
             #'(?rr-binding ...)
             #'(?base-binding ...))))]
     [(_ ?name:id ?base:id ?lang:id ?more ...)
