@@ -81,11 +81,15 @@
                        (lookup-extension param lang))
                      params)))
 
-  (define (inherited-params base lang)
+  (define (inherited-params base lang explicit-params)
+    (define explicit-set
+      (immutable-free-id-set (syntax->list explicit-params)))
     (define params (get-params base))
-    (filter (λ (param)
-              (not (lookup-extension param lang)))
-            params))
+    (map syntax-local-introduce
+         (filter (λ (param)
+                   (and (not (lookup-extension param lang))
+                        (not (free-id-set-member? explicit-set param))))
+                 params)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -149,13 +153,21 @@
      (check-valid-parameter params #'(x ...))
      "invalid parameter"))
 
+
+  (define (would-bind? x y)
+    (bound-identifier=?
+     y
+     ((make-syntax-delta-introducer y x) x)))
+
+  (define (bound-by-one-of? x ys)
+    (for/or ([y (in-syntax ys)])
+      (would-bind? y x)))
+
   ;; If we attempt to parameterize a reduction relation, make sure that it's
   ;; valid (i.e. we originally defined the relation with those parameters).
   (define (check-valid-parameter params xs)
-    (define param-set
-      (immutable-free-id-set (syntax->list params)))
     (for/first ([x (in-syntax xs)]
-                #:when (not (free-id-set-member? param-set x)))
+                #:when (not (bound-by-one-of? x params)))
       x))
 
   ;; Adds the appropriate scopes to the parameters.
@@ -164,6 +176,19 @@
       (define y-extended (lookup-extension x lang))
       (define y-lifted (add-language-scope lang x))
       (list x (or y-extended y-lifted))))
+
+    ;; Adds the appropriate scopes to the parameters.
+  (define (pre-process-base-params base lang explicit-params)
+    (define explicit-params-list (syntax->list explicit-params))
+    (define explicit-table
+      (make-immutable-free-id-table
+       (map cons explicit-params-list explicit-params-list)))
+    (define params (get-params base))
+    (for/list ([x (in-syntax params)])
+      (define y-explicit (free-id-table-ref explicit-table x (λ () #f)))
+      (define y-extended (lookup-extension x lang))
+      (define y-lifted (add-language-scope lang x))
+      (list x (or y-explicit y-extended y-lifted))))
 
   ;; Adds the appropriate scopes to the parameters.
   (define (process-params bindings lang xs ys)
@@ -190,14 +215,14 @@
         #:declare ?bs (bindings base lang params rr-bindings base-bindings)
         #:with ([_ ?x ?y] ...)
         (process-params rr-bindings lang #'(?bs.x ...) #'(?bs.y ...))
-        #:with ([?base-x* _ ?base-y] ...)
+        #:with ([?bx _ ?by] ...)
         (process-params base-bindings lang #'(?bs.x ...) #'(?bs.y ...))
         #`(let-syntax
               ([?x (make-rename-transformer #'?y)]
                ...)
             #,@(lift-parameters lang params)
             (extend-reduction-relation
-             (#,base [?base-x* ?base-y] ...)
+             (#,base [?bx ?by] ...)
              #,lang
              #,@(add-scope-to-all param-scope more)))])))
   )
@@ -211,11 +236,13 @@
     [(_ ?name:id ?base:id ?lang:id
         #:parameters (?explicit-param:id ...) ?more ...)
      #:with (?extended-param ...) (extended-params #'?base #'?lang)
-     #:with (?inherited-param ...) (inherited-params #'?base #'?lang)
+     #:with (?inherited-param ...)
+     (inherited-params #'?base #'?lang #'(?explicit-param ...))
      #:with (?new-param ...) #'(?extended-param ... ?explicit-param ...)
      #:with (?param ...) #'(?new-param ... ?inherited-param ...)
      #:with (?rr-binding ...) (pre-process-params #'(?param ...) #'?lang)
-     #:with (?base-binding ...) (pre-process-params (get-params #'?base) #'?lang)
+     #:with (?base-binding ...)
+     (pre-process-base-params #'?base #'?lang #'(?explicit-param ...))
      #`(begin
          (define-syntax ?name
            (make-rr-transformer
@@ -400,5 +427,23 @@
   (test-case "Explicit parameterization with parameter from extension."
     (check-equal? (apply-rr (r1-mf** [foo-mf** bar-mf]) (term 0)) (set 2))
     (check-equal? (apply-rr (r1-jf** [foo-jf** bar-jf]) (term 0)) (set 2)))
+
+  (define-reduction-relation r0-rename-mf
+    L0 #:parameters (bar-mf) [--> m (bar-mf m)])
+
+  (define-syntax bar-rename (make-rename-transformer #'bar-mf))
+
+  (define-extended-reduction-relation r1-rename-mf
+    r0-rename-mf L1 #:parameters (bar-rename))
+
+  (test-case "Explicit parameterization with old name."
+    (check-exn
+     #rx"invalid parameter"
+     (λ () (convert-syntax-error
+            (apply-rr (r1-rename-mf [bar-mf foo-mf]) (term 0))))))
+
+  (test-case "Parameter that is free-identifier=? existing one."
+    (check-equal? (apply-rr (r1-rename-mf [bar-rename foo-mf]) (term 0))
+                            (set 1)))
 
   )
