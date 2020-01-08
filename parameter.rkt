@@ -233,12 +233,9 @@
   (syntax-parse stx
     [(_ ?name:id
         ?lang:id
-        (~optional (~seq #:parameters ([?var:id ?default:id] ...))
-                   #:defaults ([(?var 1) '()] [(?default 1) '()]))
         ?rest ...)
      #'(define-extended-reduction-relation ?name
          empty-rr ?lang
-         #:parameters ([?var ?default] ...)
          ?rest ...)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
