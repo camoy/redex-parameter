@@ -11,6 +11,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (require (for-syntax racket/base
+                     racket/list
                      racket/sequence
                      racket/provide-transform
                      syntax/parse
@@ -159,6 +160,20 @@
         var
         name)]))
 
+  (define (lift-reduction-relation var default lang)
+    (define extension (lookup-extension default lang))
+    (define name (datum->syntax #f (gensym)))
+    (cond
+      [extension (list #'(void) var extension)]
+      [else
+       (list
+        #`(define-extended-reduction-relation
+            #,name
+            #,default
+            #,lang)
+        var
+        name)]))
+
   (define (lift-parameters lang base new-vars new-defaults)
     (define base-vars (get-params base))
     (define base-defaults (get-defaults base))
@@ -167,7 +182,9 @@
                  [default (in-list base-defaults)])
         (cond
           [(judgment-form-id? default) (lift-judgment var default lang)]
-          [(term-fn-id? default) (lift-metafunction var default lang)])))
+          [(term-fn-id? default) (lift-metafunction var default lang)]
+          [(maybe-reduction-relation? default)
+           (lift-reduction-relation var default lang)])))
     (define new-lifts
       (for/list ([var (in-syntax new-vars)]
                  [default (in-syntax new-defaults)])
@@ -210,6 +227,26 @@
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Reduction relations as parameters
+
+(begin-for-syntax
+  (define (maybe-reduction-relation? stx)
+    (define stx-val
+      (syntax-local-value stx (λ () #f)))
+    (or (not stx-val) (reduction-relation-transformer? stx-val)))
+
+  (define (reduction-cases vars defaults)
+    (filter-map
+     (λ (var default)
+       (and (maybe-reduction-relation? default)
+            #`[#,var any_1 any_2
+                    (where (_ (... ...) any_2 _ (... ...))
+                           ,(apply-reduction-relation #,var (term any_1)))]))
+     (syntax->list vars)
+     (syntax->list defaults)))
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Reduction relation
 
 (define-syntax (define-extended-reduction-relation stx)
@@ -221,6 +258,8 @@
         ?rest ...)
      #:with ([?defn ?var* ?default*] ...)
      (lift-parameters #'?lang #'?base #'(?var ...) #'(?default ...))
+     #:with (?reduction-cases ...)
+     (reduction-cases #'(?var ...) #'(?default ...))
      #'(begin
          (define-rename-transformer-parameter ?var
            (make-rename-transformer #'?default)) ...
@@ -229,7 +268,9 @@
            (make-reduction-relation-transformer
             #'?base #'?lang
             #'(?var* ...) #'(?default* ...)
-            #'((... ...) (?rest ...)))))]))
+            #'((... ...) (?reduction-cases ... ?rest ...))))
+         (begin-for-syntax
+           (record-extension! #'?base #'?lang #'?name)))]))
 
 (define-syntax (define-reduction-relation stx)
   (syntax-parse stx
@@ -274,9 +315,16 @@
     #:parameters ([foo-jf -foo-jf])
     [--> m_1 m_2 (judgment-holds (foo-jf m_1 m_2))])
 
+  (define-reduction-relation r0-rr
+    L0
+    #:parameters ([r r0-mf])
+    with
+    [(--> lhs rhs) (r lhs rhs)])
+
   (test-case "Normal functioning."
     (check-equal? (apply-rr r0-mf (term 0)) (set 1))
-    (check-equal? (apply-rr r0-jf (term 0)) (set 1)))
+    (check-equal? (apply-rr r0-jf (term 0)) (set 1))
+    (check-equal? (apply-rr r0-rr (term 0)) (set 1)))
 
   (define-metafunction L0
     [(-bar-mf m) 2])
@@ -285,9 +333,12 @@
     #:mode (-bar-jf I O)
     [(-bar-jf m 2)])
 
+  (define r* (r0-mf [foo-mf -bar-mf]))
+
   (test-case "Explicit parameterization."
     (check-equal? (apply-rr (r0-mf [foo-mf -bar-mf]) (term 0)) (set 2))
-    (check-equal? (apply-rr (r0-jf [foo-jf -bar-jf]) (term 0)) (set 2)))
+    (check-equal? (apply-rr (r0-jf [foo-jf -bar-jf]) (term 0)) (set 2))
+    (check-equal? (apply-rr (r0-rr [r r*]) (term 0)) (set 2)))
 
   (test-case "Explicit parameterization failures."
     (check-exn
@@ -306,6 +357,11 @@
   (define-extended-language L1 L0
     [m ::= .... string])
 
+  (define-extended-reduction-relation r1-rr-no-extend r0-rr L1)
+
+  (test-case "Implicit lifting of reduction relation."
+    (check-equal? (apply-rr r1-rr-no-extend (term "hi")) (set 1)))
+
   (define-extended-reduction-relation r1-mf
     r0-mf L1
     [--> m 13])
@@ -314,13 +370,16 @@
     r0-jf L1
     [--> m 13])
 
+  (define-extended-reduction-relation r1-rr r0-rr L1)
+
   (test-case "Normal extension."
     (check-equal? (apply-rr r1-mf (term 0)) (set 1 13))
     (check-equal? (apply-rr r1-jf (term 0)) (set 1 13)))
 
   (test-case "Extension with implicit lifting."
     (check-equal? (apply-rr r1-mf (term "hi")) (set 1 13))
-    (check-equal? (apply-rr r1-jf (term "hi")) (set 1 13)))
+    (check-equal? (apply-rr r1-jf (term "hi")) (set 1 13))
+    (check-equal? (apply-rr r1-rr (term "hi")) (set 1 13)))
 
   (test-case "Explicit parameterization of an extension."
     (check-equal? (apply-rr (r1-mf [foo-mf -bar-mf]) (term 0)) (set 2 13))
