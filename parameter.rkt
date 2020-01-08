@@ -250,15 +250,22 @@
 ;; Reduction relation
 
 (define-syntax (define-extended-reduction-relation stx)
-  (syntax-parse stx
+  (syntax-parse stx #:literals (with)
     [(_ ?name:id
         ?base:id ?lang:id
         (~optional (~seq #:parameters ([?var:id ?default:id] ...))
                    #:defaults ([(?var 1) '()] [(?default 1) '()]))
-        ?rest ...)
+        (~and (~seq (~not with) ...)
+              (~seq ?reduction-case ...))
+        (~optional (~seq with ?shortcut* ...)
+                   #:defaults ([(?shortcut* 1) '()])))
+     #:with (?shortcut ...)
+     (if (empty? (syntax->list #'(?shortcut* ...)))
+         #'()
+         #'(with ?shortcut* ...))
      #:with ([?defn ?var* ?default*] ...)
      (lift-parameters #'?lang #'?base #'(?var ...) #'(?default ...))
-     #:with (?reduction-cases ...)
+     #:with (?param-case ...)
      (reduction-cases #'(?var ...) #'(?default ...))
      #'(begin
          (define-rename-transformer-parameter ?var
@@ -268,7 +275,8 @@
            (make-reduction-relation-transformer
             #'?base #'?lang
             #'(?var* ...) #'(?default* ...)
-            #'((... ...) (?reduction-cases ... ?rest ...))))
+            #'((... ...)
+               (?reduction-case ... ?param-case ... ?shortcut ...))))
          (begin-for-syntax
            (record-extension! #'?base #'?lang #'?name)))]))
 
