@@ -22,6 +22,8 @@
          (only-in redex/private/judgment-form
                   judgment-form-id?
                   lookup-judgment-form-id)
+         (only-in redex/private/term
+                  term-fn-id?)
          racket/stxparam
          redex/reduction-semantics)
 
@@ -165,7 +167,7 @@
                  [default (in-list base-defaults)])
         (cond
           [(judgment-form-id? default) (lift-judgment var default lang)]
-          [else (lift-metafunction var default lang)])))
+          [(term-fn-id? default) (lift-metafunction var default lang)])))
     (define new-lifts
       (for/list ([var (in-syntax new-vars)]
                  [default (in-syntax new-defaults)])
