@@ -1,3 +1,3 @@
-redex-parameter
-===============
-README text here.
+# Redex Parameters
+
+Parameterized reduction relations in Redex.
