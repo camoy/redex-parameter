@@ -21,8 +21,9 @@
 This package implements forms for
 parameterized reduction relations.
 When extending reduction relations
-that depend on metafunctions or
+that depend on metafunctions,
 judgment forms,
+or other reduction relations,
 parameterized reduction relations
 can automatically lift forms at
 lower language levels.
@@ -149,6 +150,33 @@ the original bad reduction relation's behavior.
 
 @examples[#:eval redex-evaluator #:label #f
   (eval:error (apply-reduction-relation (r1 #:disable) "hi"))]
+
+A reduction relation can also be parameterized
+by another reduction relation.
+This will introduce it as another arrow
+named the same as the parameter.
+
+@examples[#:eval redex-evaluator #:label #f
+  (define-reduction-relation r-13
+    L0
+    [--> m 13])
+
+  (define-reduction-relation r-21
+    L0
+    [--> m 21])
+
+  (define-reduction-relation wrap
+    L0
+    #:parameters ([r r-13])
+    with
+    [(--> a (wrap b))
+     (r a b)])
+
+  (apply-reduction-relation wrap (term 0))
+  (apply-reduction-relation (wrap [r r-21]) (term 0))]
+
+The same lifting behavior applies
+to reduction relations.
 
 @section{Reference}
 
