@@ -243,39 +243,20 @@
     (define not-stx?
       (not (syntax-local-value stx (λ () #f))))
     (or not-stx? (parameterized-reduction-relation? stx)))
-
-  (define (reduction-cases vars defaults)
-    (filter-map
-     (λ (var default)
-       (and (maybe-reduction-relation? default)
-            #`[#,var any_1 any_2
-                    (where (_ (... ...) any_2 _ (... ...))
-                           ,(apply-reduction-relation #,var (term any_1)))]))
-     (syntax->list vars)
-     (syntax->list defaults)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Reduction relation
 
 (define-syntax (define-extended-reduction-relation stx)
-  (syntax-parse stx #:literals (with)
+  (syntax-parse stx
     [(_ ?name:id
         ?base:id ?lang:id
         (~optional (~seq #:parameters ([?var:id ?default:id] ...))
                    #:defaults ([(?var 1) '()] [(?default 1) '()]))
-        (~and (~seq (~not with) ...)
-              (~seq ?reduction-case ...))
-        (~optional (~seq with ?shortcut* ...)
-                   #:defaults ([(?shortcut* 1) '()])))
-     #:with (?shortcut ...)
-     (if (empty? (syntax->list #'(?shortcut* ...)))
-         #'()
-         #'(with ?shortcut* ...))
+        ?rest ...)
      #:with ([?defn ?var* ?default*] ...)
      (lift-parameters #'?lang #'?base #'(?var ...) #'(?default ...))
-     #:with (?param-case ...)
-     (reduction-cases #'(?var ...) #'(?default ...))
      #'(begin
          (define-rename-transformer-parameter ?var
            (make-rename-transformer #'?default)) ...
@@ -284,8 +265,7 @@
            (make-reduction-relation-transformer
             #'?base #'?lang
             #'(?var* ...) #'(?default* ...)
-            #'((... ...)
-               (?reduction-case ... ?param-case ... ?shortcut ...))))
+            #'((... ...) (?rest ...))))
          (begin-for-syntax
            (record-extension! #'?base #'?lang #'?name)))]))
 
@@ -335,8 +315,9 @@
   (define-reduction-relation r0-rr
     L0
     #:parameters ([r r0-mf])
-    with
-    [(--> lhs rhs) (r lhs rhs)])
+    [--> m_1 m_2
+         (where (_ ... m_2 _ ...)
+                ,(apply-reduction-relation r (term m_1)))])
 
   (test-case "Normal functioning."
     (check-equal? (apply-rr r0-mf (term 0)) (set 1))
