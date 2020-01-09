@@ -175,21 +175,24 @@
         name)]))
 
   (define (lift-parameters lang base new-vars new-defaults)
-    (define base-vars (get-params base))
-    (define base-defaults (get-defaults base))
-    (define base-lifts
-      (for/list ([var (in-list base-vars)]
-                 [default (in-list base-defaults)])
-        (cond
-          [(judgment-form-id? default) (lift-judgment var default lang)]
-          [(term-fn-id? default) (lift-metafunction var default lang)]
-          [(maybe-reduction-relation? default)
-           (lift-reduction-relation var default lang)])))
-    (define new-lifts
-      (for/list ([var (in-syntax new-vars)]
-                 [default (in-syntax new-defaults)])
-        (list #'(void) var default)))
-    (append base-lifts new-lifts))
+    (cond
+      [(parameterized-reduction-relation? base)
+       (define base-vars (get-params base))
+       (define base-defaults (get-defaults base))
+       (define base-lifts
+         (for/list ([var (in-list base-vars)]
+                    [default (in-list base-defaults)])
+           (cond
+             [(judgment-form-id? default) (lift-judgment var default lang)]
+             [(term-fn-id? default) (lift-metafunction var default lang)]
+             [(maybe-reduction-relation? default)
+              (lift-reduction-relation var default lang)])))
+       (define new-lifts
+         (for/list ([var (in-syntax new-vars)]
+                    [default (in-syntax new-defaults)])
+           (list #'(void) var default)))
+       (append base-lifts new-lifts)]
+      [else '()]))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -213,8 +216,9 @@
 
        ;; No parameterization
        [(?r:id #:disable)
-        #`(extend-reduction-relation
-           (#,base #:disable) #,lang #,@rests)]
+        (if (parameterized-reduction-relation? base)
+            #`(extend-reduction-relation (#,base #:disable) #,lang #,@rests)
+            #`(extend-reduction-relation #,base #,lang #,@rests))]
 
        ;; Explicit parameterization
        [(?r:id ?bs)
@@ -230,10 +234,15 @@
 ;; Reduction relations as parameters
 
 (begin-for-syntax
-  (define (maybe-reduction-relation? stx)
+  (define (parameterized-reduction-relation? stx)
     (define stx-val
       (syntax-local-value stx (λ () #f)))
-    (or (not stx-val) (reduction-relation-transformer? stx-val)))
+    (reduction-relation-transformer? stx-val))
+
+  (define (maybe-reduction-relation? stx)
+    (define not-stx?
+      (not (syntax-local-value stx (λ () #f))))
+    (or not-stx? (parameterized-reduction-relation? stx)))
 
   (define (reduction-cases vars defaults)
     (filter-map
@@ -364,6 +373,18 @@
 
   (define-extended-language L1 L0
     [m ::= .... string])
+
+  (define normal-rr
+    (reduction-relation
+     L0
+     [--> m 1]))
+
+  (define-extended-reduction-relation normal-extended
+    normal-rr L1
+    [--> m 10])
+
+  (test-case "Extension of normal reduction relation."
+    (check-equal? (apply-rr normal-extended (term "hi")) (set 1 10)))
 
   (define-extended-reduction-relation r1-rr-no-extend r0-rr L1)
 
