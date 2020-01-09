@@ -202,7 +202,7 @@ to reduction relations.
            [(parameters (code:line)
                         (code:line #:parameters ([parameter default] ...)))]]{
   Defines @racket[id] as a parameterized reduction relation which extends
-  an existing one, @racket[reduction-relation].
+  an existing one.
   The set of parameters is extended with any new parameters.
   The remaining arguments are as in @racket[extend-reduction-relation].
 }
