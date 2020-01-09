@@ -467,4 +467,27 @@
   (test-case "Closure with reduction relation extension."
     (check-equal? (apply-rr r1-mf-wrap (term (wrap "hi")))
                   (set (term (wrap 4)))))
+
+  (define-extended-language L2 L1
+    [m ::= .... boolean])
+
+  (define-metafunction L0
+    [(gimme-one m) 1])
+
+  (define-reduction-relation r0-triple
+    L0
+    #:parameters ([triple-mf gimme-one])
+    [--> m (triple-mf m)])
+
+  (define-extended-reduction-relation r1-triple r0-triple L1)
+
+  (define-extended-metafunction gimme-one L2
+    [(gimme-seventeen m) 17])
+
+  (define-extended-reduction-relation r2-triple r1-triple L2)
+
+  (test-case "Extend metafunction one level down."
+    (check-equal? (apply-rr r0-triple 0) (set 1))
+    (check-equal? (apply-rr r1-triple "hi") (set 1))
+    (check-equal? (apply-rr r1-triple #t) (set 17)))
   )
