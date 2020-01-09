@@ -94,9 +94,10 @@
   (define extension-table (make-free-id-table))
 
   (define (record-extension! base lang name)
-    (define lang-table
-      (free-id-table-ref! extension-table base make-free-id-table))
-    (free-id-table-set! lang-table lang name))
+    (when (identifier? base)
+      (define lang-table
+        (free-id-table-ref! extension-table base make-free-id-table))
+      (free-id-table-set! lang-table lang name)))
 
   (define (lookup-extension base lang)
     (define lang-table
@@ -175,28 +176,37 @@
         name)]))
 
   (define (lift-parameters lang base new-vars new-defaults)
-    (cond
-      [(parameterized-reduction-relation? base)
-       (define base-vars (get-params base))
-       (define base-defaults (get-defaults base))
-       (define base-lifts
+    (define base-lifts
+      (cond
+        [(parameterized-reduction-relation? base)
+         (define base-vars (get-params base))
+         (define base-defaults (get-defaults base))
          (for/list ([var (in-list base-vars)]
                     [default (in-list base-defaults)])
            (cond
              [(judgment-form-id? default) (lift-judgment var default lang)]
              [(term-fn-id? default) (lift-metafunction var default lang)]
              [(maybe-reduction-relation? default)
-              (lift-reduction-relation var default lang)])))
-       (define new-lifts
-         (for/list ([var (in-syntax new-vars)]
-                    [default (in-syntax new-defaults)])
-           (list #'(void) var default)))
-       (append base-lifts new-lifts)]
-      [else '()]))
+              (lift-reduction-relation var default lang)]))]
+        [else '()]))
+    (define new-lifts
+      (for/list ([var (in-syntax new-vars)]
+                 [default (in-syntax new-defaults)])
+        (list #'(void) var default)))
+    (append base-lifts new-lifts))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Reduction relation transformer constructor
+
+(define-rename-transformer-parameter current-language
+  (make-rename-transformer #'current-language-error))
+
+(define-syntax (current-language-error stx)
+  (raise-syntax-error
+   #f
+   "cannot use current-language outside of parameterized reduction relation"
+   stx))
 
 (begin-for-syntax
   (define (make-reduction-relation-transformer
@@ -211,7 +221,9 @@
        [?r:id
         #:with (?x ...) params
         #:with (?y ...) defaults
-        #`(syntax-parameterize ([?x (make-rename-transformer #'?y)] ...)
+        #`(syntax-parameterize ([current-language
+                                 (make-rename-transformer #'#,lang)]
+                                [?x (make-rename-transformer #'?y)] ...)
             (?r #:disable))]
 
        ;; No parameterization
@@ -225,7 +237,9 @@
         #:declare ?bs (bindings params)
         #:with (?x ...) params
         #:with (?y ...) defaults
-        #`(syntax-parameterize ([?x (make-rename-transformer #'?y)] ...)
+        #`(syntax-parameterize ([current-language
+                                 (make-rename-transformer #'#,lang)]
+                                [?x (make-rename-transformer #'?y)] ...)
             (syntax-parameterize ([?bs.x (make-rename-transformer #'?bs.y)] ...)
               (?r #:disable)))])))
   )
@@ -235,14 +249,15 @@
 
 (begin-for-syntax
   (define (parameterized-reduction-relation? stx)
-    (define stx-val
-      (syntax-local-value stx (λ () #f)))
-    (reduction-relation-transformer? stx-val))
+    (and (identifier? stx)
+         (let ([stx-val (syntax-local-value stx (λ () #f))])
+           (reduction-relation-transformer? stx-val))))
 
   (define (maybe-reduction-relation? stx)
-    (define not-stx?
-      (not (syntax-local-value stx (λ () #f))))
-    (or not-stx? (parameterized-reduction-relation? stx)))
+    (define not-bound-id?
+      (or (not (identifier? stx))
+          (not (syntax-local-value stx (λ () #f)))))
+    (or not-bound-id? (parameterized-reduction-relation? stx)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -251,7 +266,8 @@
 (define-syntax (define-extended-reduction-relation stx)
   (syntax-parse stx
     [(_ ?name:id
-        ?base:id ?lang:id
+        ?base
+        ?lang:id
         (~optional (~seq #:parameters ([?var:id ?default:id] ...))
                    #:defaults ([(?var 1) '()] [(?default 1) '()]))
         ?rest ...)
@@ -293,7 +309,8 @@
   ;; L0
 
   (define-language L0
-    [m ::= number])
+    [m ::= number]
+    [E ::= (wrap E) hole])
 
   (define-metafunction L0
     [(-foo-mf m) 1])
@@ -435,4 +452,19 @@
   (test-case "Normal extension with parameter from extension."
     (check-equal? (apply-rr r1-mf** (term 0)) (set 4))
     (check-equal? (apply-rr r1-jf** (term 0)) (set 1 4)))
+
+  (define-extended-reduction-relation r0-mf-wrap
+    (context-closure s current-language E)
+    L0
+    #:parameters ([s r0-mf]))
+
+  (test-case "Extend closure of reduction relation."
+    (check-equal? (apply-rr r0-mf-wrap (term (wrap 0)))
+                  (set (term (wrap 1)))))
+
+  (define-extended-reduction-relation r1-mf-wrap r0-mf-wrap L1)
+
+  (test-case "Closure with reduction relation extension."
+    (check-equal? (apply-rr r1-mf-wrap (term (wrap "hi")))
+                  (set (term (wrap 4)))))
   )
