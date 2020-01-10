@@ -34,8 +34,8 @@
 (begin-for-syntax
   ;; Reduction relation transformer struct. Contains the transformer itself
   ;; as well as a field containing the parameters.
-  (struct reduction-relation-transformer (parameters defaults transformer)
-    #:property prop:procedure 2)
+  (struct reduction-relation-transformer (parameters defaults roots transformer)
+    #:property prop:procedure 3)
 
   ;; Returns the parameters of a reduction relation transformer.
   (define (get-params rr)
@@ -44,10 +44,14 @@
     ;; Returns the defaults of a reduction relation transformer.
   (define (get-defaults rr)
     (reduction-relation-transformer-defaults (syntax-local-value rr)))
+
+  ;; Returns the defaults of a reduction relation transformer.
+  (define (get-roots rr)
+    (reduction-relation-transformer-roots (syntax-local-value rr)))
   )
 
 (define-syntax empty-rr
-  (reduction-relation-transformer '() '() (λ _ #'empty-reduction-relation)))
+  (reduction-relation-transformer '() '() '() (λ _ #'empty-reduction-relation)))
 
 (define-syntax reduction-out
   (make-provide-transformer
@@ -131,11 +135,11 @@
 ;; Lifts
 
 (begin-for-syntax
-  (define (lift-metafunction var default lang)
-    (define extension (lookup-extension default lang))
+  (define (lift-metafunction var default root lang)
+    (define extension (lookup-extension root lang))
     (define name (datum->syntax #f (gensym)))
     (cond
-      [extension (list #'(void) var extension)]
+      [extension (list #'(void) var extension extension)]
       [else
        (list
         #`(define-metafunction/extension
@@ -143,15 +147,16 @@
             #,lang
             #,name : any (... ...) -> any)
         var
-        name)]))
+        name
+        root)]))
 
-  (define (lift-judgment var default lang)
-    (define extension (lookup-extension default lang))
+  (define (lift-judgment var default root lang)
+    (define extension (lookup-extension root lang))
     (define name (datum->syntax #f (gensym)))
     (define mode
       (judgment-form-mode (lookup-judgment-form-id default)))
     (cond
-      [extension (list #'(void) var extension)]
+      [extension (list #'(void) var extension extension)]
       [else
        (list
         #`(define-extended-judgment-form
@@ -159,21 +164,30 @@
             #,default
             #:mode (#,name #,@mode))
         var
-        name)]))
+        name
+        root)]))
 
-  (define (lift-reduction-relation var default lang)
-    (define extension (lookup-extension default lang))
+  (define (lift-reduction-relation var default root lang)
+    (define extension (lookup-extension root lang))
     (define name (datum->syntax #f (gensym)))
     (cond
-      [extension (list #'(void) var extension)]
+      [extension (list #'(void) var extension extension)]
       [else
        (list
-        #`(define-extended-reduction-relation
+        #`(-define-extended-reduction-relation
             #,name
             #,default
             #,lang)
         var
-        name)]))
+        name
+        root)]))
+
+  (define (lift-generic var default root lang)
+    (cond
+      [(judgment-form-id? default) (lift-judgment var default root lang)]
+      [(term-fn-id? default) (lift-metafunction var default root lang)]
+      [(maybe-reduction-relation? default)
+       (lift-reduction-relation var default root lang)]))
 
   (define (lift-parameters lang base new-vars new-defaults)
     (define base-lifts
@@ -181,18 +195,17 @@
         [(parameterized-reduction-relation? base)
          (define base-vars (get-params base))
          (define base-defaults (get-defaults base))
+         (define base-roots (get-roots base))
          (for/list ([var (in-list base-vars)]
-                    [default (in-list base-defaults)])
-           (cond
-             [(judgment-form-id? default) (lift-judgment var default lang)]
-             [(term-fn-id? default) (lift-metafunction var default lang)]
-             [(maybe-reduction-relation? default)
-              (lift-reduction-relation var default lang)]))]
+                    [default (in-list base-defaults)]
+                    [root (in-list base-roots)])
+           (lift-generic var default root lang))]
         [else '()]))
     (define new-lifts
       (for/list ([var (in-syntax new-vars)]
                  [default (in-syntax new-defaults)])
-        (list #'(void) var default)))
+        (lift-generic var default default lang)
+        #;(list #'(void) var default default)))
     (append base-lifts new-lifts))
   )
 
@@ -210,12 +223,14 @@
 
 (begin-for-syntax
   (define (make-reduction-relation-transformer
-           base lang -params -defaults rests)
+           base lang -params -defaults -roots rests)
     (define params (syntax->list -params))
     (define defaults (syntax->list -defaults))
+    (define roots (syntax->list -roots))
     (reduction-relation-transformer
      params
      defaults
+     roots
      (syntax-parser
        ;; Lifts
        [?r:id
@@ -263,7 +278,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Reduction relation
 
-(define-syntax (define-extended-reduction-relation stx)
+(define-syntax (-define-extended-reduction-relation stx)
   (syntax-parse stx
     [(_ ?name:id
         ?base
@@ -271,7 +286,7 @@
         (~optional (~seq #:parameters ([?var:id ?default:id] ...))
                    #:defaults ([(?var 1) '()] [(?default 1) '()]))
         ?rest ...)
-     #:with ([?defn ?var* ?default*] ...)
+     #:with ([?defn ?var* ?default* ?root*] ...)
      (lift-parameters #'?lang #'?base #'(?var ...) #'(?default ...))
      #'(begin
          (define-rename-transformer-parameter ?var
@@ -280,8 +295,14 @@
          (define-syntax ?name
            (make-reduction-relation-transformer
             #'?base #'?lang
-            #'(?var* ...) #'(?default* ...)
-            #'((... ...) (?rest ...))))
+            #'(?var* ...) #'(?default* ...) #'(?root* ...)
+            #'((... ...) (?rest ...)))))]))
+
+(define-syntax (define-extended-reduction-relation stx)
+  (syntax-parse stx
+    [(_ ?name:id ?base ?lang:id ?rest ...)
+     #'(begin
+         (-define-extended-reduction-relation ?name ?base ?lang ?rest ...)
          (begin-for-syntax
            (record-extension! #'?base #'?lang #'?name)))]))
 
@@ -371,6 +392,15 @@
 
   (define-extended-language L1 L0
     [m ::= .... string])
+
+  (define-reduction-relation r-immediate
+    L1
+    #:parameters ([mf-immediate -foo-mf])
+    [--> m (mf-immediate m)])
+
+  (test-case "Immediate lift."
+    (check-equal? (apply-rr r-immediate (term "hi"))
+                  (set 1)))
 
   (define normal-rr
     (reduction-relation
@@ -489,5 +519,5 @@
   (test-case "Extend metafunction one level down."
     (check-equal? (apply-rr r0-triple 0) (set 1))
     (check-equal? (apply-rr r1-triple "hi") (set 1))
-    (check-equal? (apply-rr r1-triple #t) (set 17)))
+    (check-equal? (apply-rr r2-triple #t) (set 17)))
   )
