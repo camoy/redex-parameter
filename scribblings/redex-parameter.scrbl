@@ -151,6 +151,31 @@ the original bad reduction relation's behavior.
 @examples[#:eval redex-evaluator #:label #f
   (eval:error (apply-reduction-relation (r1 #:disable) "hi"))]
 
+You can also parameterize a reduction relation by another one.
+This is potentially useful if the base relation you're extending
+may change.
+
+@examples[#:eval redex-evaluator #:label #f
+(define-reduction-relation r-13
+  L0
+  [--> m 13])
+
+(define-reduction-relation r-21
+  L0
+  [--> m 21])
+
+(define-extended-reduction-relation wrap
+  (context-closure r current-language (over hole))
+  L0
+  #:parameters ([r r-13]))
+
+(apply-reduction-relation wrap (term (over 0)))
+(apply-reduction-relation (wrap [r r-21]) (term (over 0)))]
+
+Here we use @racket[current-language] instead of hard-coding @racket[L0].
+This allows @racket[wrap] to work properly if it's automatically lifted
+to a language extension.
+
 @section{Reference}
 
 @defform[(define-reduction-relation id
@@ -203,4 +228,9 @@ the original bad reduction relation's behavior.
 @defform[(reduction-out id)]{
 Exports the parameterized reduction relation @racket[id]
 and its parameters.
+}
+
+@defidform[current-language]{
+Bound to the current language with the definition of a parameterized
+reduction relation.
 }
