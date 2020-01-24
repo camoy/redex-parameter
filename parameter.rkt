@@ -138,7 +138,7 @@
 (begin-for-syntax
   (define (lift-metafunction var default root lang)
     (define extension (lookup-extension root lang))
-    (define name (datum->syntax #f (gensym)))
+    (define name (datum->syntax #f (gensym (syntax->datum root))))
     (cond
       [extension (list #'(void) var extension extension)]
       [else
@@ -153,7 +153,7 @@
 
   (define (lift-judgment var default root lang)
     (define extension (lookup-extension root lang))
-    (define name (datum->syntax #f (gensym)))
+    (define name (datum->syntax #f (gensym (syntax->datum root))))
     (define mode
       (judgment-form-mode (lookup-judgment-form-id default)))
     (cond
@@ -170,7 +170,7 @@
 
   (define (lift-reduction-relation var default root lang)
     (define extension (lookup-extension root lang))
-    (define name (datum->syntax #f (gensym)))
+    (define name (datum->syntax #f (gensym (syntax->datum root))))
     (cond
       [extension (list #'(void) var extension extension)]
       [else
