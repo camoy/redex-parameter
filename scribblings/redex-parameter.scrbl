@@ -13,7 +13,7 @@
        #:requires '(redex/reduction-semantics
                     redex/parameter))))
 
-@title{Redex Parameters}
+@title{Redex Parameter}
 @author{Cameron Moy}
 
 @defmodule[redex/parameter]
