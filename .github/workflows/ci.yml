@@ -11,4 +11,4 @@ jobs:
           distribution: 'full'
           variant: 'regular'
           version: 'current'
-      - run: raco test --drdr redex-parameter
+      - run: raco test --drdr .
