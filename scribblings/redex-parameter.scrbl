@@ -5,15 +5,12 @@
          racket/sandbox
          scribble/example]
 
-@(define redex-evaluator
-   (parameterize ([sandbox-output 'string]
-                  [sandbox-error-output 'string]
-                  [sandbox-memory-limit 50])
-     (make-evaluator 'racket/base
-       #:requires '(redex/reduction-semantics
-                    redex/parameter))))
+@(define evaluator
+  (make-base-eval
+    '(require redex/reduction-semantics
+              redex/parameter)))
 
-@title{Redex Parameter}
+@title{Redex Parameters}
 @author{Cameron Moy}
 
 @defmodule[redex/parameter]
@@ -37,7 +34,7 @@ We will rely on this metafunction,
 defined on @racket[L0],
 in our reduction relation.
 
-@examples[#:eval redex-evaluator #:no-result
+@examples[#:eval evaluator #:no-result
   (define-language L0
     [m ::= number])
 
@@ -52,7 +49,7 @@ in our reduction relation.
 As expected, we can see what happens when we
 step with @racket[r0-bad].
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (apply-reduction-relation r0-bad 999)]
 
 Why is @racket[r0-bad] named as such?
@@ -66,7 +63,7 @@ all rules to the new language,
 but metafunction and judgment form
 dependencies will not be reinterpreted.
 
-@examples[#:eval redex-evaluator #:no-result
+@examples[#:eval evaluator #:no-result
   (define-extended-language L1 L0
     [m ::= .... string])
 
@@ -82,7 +79,7 @@ but the metafunction @racket[L0-number]
 is undefined for strings.
 This will yield an error.
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (eval:error (apply-reduction-relation r1-bad "hi"))]
 
 Parameterized reduction relations solve this problem.
@@ -90,7 +87,7 @@ We'll instead define @racket[r0] with
 @racket[define-reduction-relation]
 and parameterize it by the metafunction.
 
-@examples[#:eval redex-evaluator #:no-result
+@examples[#:eval evaluator #:no-result
   (define-reduction-relation r0
     L0
     #:parameters ([lang-number L0-number])
@@ -102,14 +99,14 @@ as before.
 For @racket[L0] there is no difference between
 @racket[r0] and @racket[r0-bad].
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (apply-reduction-relation r0 999)]
 
 However if we do the extension as before,
 the parameter's default value will be
 lifted to the current language.
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (define-extended-reduction-relation r1 r0 L1)
   (apply-reduction-relation r1 "hi")]
 
@@ -119,7 +116,7 @@ we'd like it to give back @racket[1].
 One way to do this is to extend
 the original metafunction.
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (define-extended-metafunction L0-number L1
     [(L1-number m) 1])
   (define-extended-reduction-relation r1* r0 L1)
@@ -137,7 +134,7 @@ that will be used instead.
 If you want to set a parameter to a specific value,
 you can give an explicit parameterization.
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (define-metafunction L1
     [(silly m) "☺"])
   (apply-reduction-relation (r1 [lang-number silly]) "hi")]
@@ -148,14 +145,14 @@ to the parameterization and it will
 disable all the automatic lifting and we get back
 the original bad reduction relation's behavior.
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
   (eval:error (apply-reduction-relation (r1 #:disable) "hi"))]
 
 You can also parameterize a reduction relation by another one.
 This is potentially useful if the base relation you're extending
 may change.
 
-@examples[#:eval redex-evaluator #:label #f
+@examples[#:eval evaluator #:label #f
 (define-reduction-relation r-13
   L0
   [--> m 13])
