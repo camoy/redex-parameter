@@ -16,5 +16,5 @@ jobs:
           variant: 'regular'
           version: 'current'
       - run: raco pkg install --deps search-auto || true
-      - run: raco setup redex-parameter
+      - run: raco setup redex
       - run: raco test --drdr .
