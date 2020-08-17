@@ -10,8 +10,8 @@
          define-extended-metafunction
          define-metafunction*
          define-extended-metafunction*
-         #;define-judgment-form*
-         #;define-extended-judgment-form*)
+         define-judgment-form*
+         define-extended-judgment-form*)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; require
@@ -36,7 +36,10 @@
              #:attr (val 1) null))
 
   (define-syntax-class mf-case
-    (pattern [(name _ ...) _ ...]))
+    (pattern [(name:id _ ...) _ ...]))
+
+  (define-syntax-class mode
+    (pattern (name:id _ ...)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -166,7 +169,7 @@
                         #'(?p.param ...)
                         #'(?p.val ...)
                         #'(define-extended-metafunction
-                            ?base *LANG* ?more ... ?c))
+                            ?base* *LANG* ?more ... ?c))
      #`(begin
          ?defn-base ?defn-form
          (begin-for-syntax
@@ -175,10 +178,38 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; judgment form
 
+(define-syntax (define-judgment-form* stx)
+  (syntax-parse stx
+    [(_ ?lang:id ?p:params #:mode ?m:mode ?more ...)
+     #:with ?name #'?m.name
+     (redex-form-syntax #'?name
+                        #'?lang
+                        #'(?p.param ...)
+                        #'(?p.val ...)
+                        #'(define-judgment-form
+                            *LANG* #:mode ?m ?more ...))]))
+
+(define-syntax (define-extended-judgment-form* stx)
+  (syntax-parse stx
+    [(_ ?base:id ?lang:id #:mode ?m:mode ?p:params ?more ...)
+     #:with ?name #'?m.name
+     #:with [?base* ?defn-base] (lift #'?base #'?lang)
+     #:with ?defn-form
+     (redex-form-syntax #'?name
+                        #'?lang
+                        #'(?p.param ...)
+                        #'(?p.val ...)
+                        #'(define-extended-judgment-form
+                            *LANG* ?base* #:mode ?m ?more ...))
+     #`(begin
+         ?defn-base ?defn-form
+         (begin-for-syntax
+           (add-extension! #'?base #'?lang #'?name)))]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; test
 
-(module+ test
+#;(module+ test
   (define-language L0
     [m ::= number])
 
@@ -190,15 +221,27 @@
     #:parameters ([lang-number L0-number])
     [--> m (lang-number m)])
 
+  (define-judgment-form* L0
+    #:parameters ([lang-number L0-number])
+    #:mode (jf I O)
+    [(jf m (lang-number m))])
+
   #;(apply-reduction-relation r0 (term 0))
 
   (define-extended-language L1 L0
     [m ::= .... string])
 
   (define-extended-metafunction* L0-number L1
-      [(L1-number m) 43])
+    [(L1-number m) 43])
 
   (define-extended-reduction-relation* r1 r0 L1)
 
+  (define-extended-judgment-form* jf L1
+    #:mode (jf* I O))
+
   (apply-reduction-relation r1 (term "hi"))
+  (judgment-holds (jf* "hi" m))
+
+  ;;
+
   )
