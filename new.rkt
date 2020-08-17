@@ -29,15 +29,18 @@
 ;; syntax classes
 
 (begin-for-syntax
+  ;; For parsing the `define-...*` forms.
   (define-splicing-syntax-class params
     (pattern (~seq #:parameters ([param:id val:id] ...)))
     (pattern (~seq)
              #:attr (param 1) null
              #:attr (val 1) null))
 
+  ;; For extracting the name from a metafunction.
   (define-syntax-class mf-case
     (pattern [(name:id _ ...) _ ...]))
 
+  ;; Similar, but for a judgment.
   (define-syntax-class mode
     (pattern (name:id _ ...)))
   )
@@ -46,11 +49,17 @@
 ;; compile-time tables
 
 (begin-for-syntax
+  ;; [Free-Id-Table Identifier Procedure]
+  ;; Maps a redex object identifier to a constructor for that object.
   (define maker-table (make-free-id-table))
 
+  ;; Identifier Procedure → Any
+  ;; Adds a constructor for a redex object.
   (define (add-maker! id maker)
     (free-id-table-set! maker-table id maker))
 
+  ;; Identifier Identifier → Syntax
+  ;; Returns the syntax needed to define the object `id` for `lang`.
   (define (apply-maker id lang)
     (define (not-found)
       (error 'redex-parameter
@@ -61,13 +70,20 @@
       (free-id-table-ref maker-table id not-found))
     (maker lang))
 
+  ;; [Free-Id-Table Identifier [Free-Id-Table Identifier Identifier]
+  ;; A two-level table mapping a redex object identifier and a language to
+  ;; the identifier that extends it for that language.
   (define extension-table (make-free-id-table))
 
+  ;; Identifier Identifier Identifier → Any
+  ;; Add the given extension to the table of extensions.
   (define (add-extension! base lang name)
     (define lang-table
       (free-id-table-ref! extension-table base make-free-id-table))
     (free-id-table-set! lang-table lang name))
 
+  ;; Identifier Identifier → Identifier
+  ;; Retrieves the most recent extension of `base` for `lang`.
   (define (get-extension base lang)
     (define lang-table
       (free-id-table-ref extension-table base (λ _ #f)))
@@ -79,7 +95,10 @@
 ;; generic parameterized syntax
 
 (begin-for-syntax
-  (define (redex-form-syntax name lang params vals defn)
+  ;; Identifier Identifier Syntax Syntax Syntax → Syntax
+  ;; Returns syntax that defines the object (according to `defn`) parameterized
+  ;; appropriately for `lang`.
+  (define (redex-obj-syntax name lang params vals defn)
     (define (maker lang)
       (define stx (make-params lang params vals))
       (with-syntax ([([?param ?val ?lift] ...) stx])
@@ -93,19 +112,25 @@
         #,(maker lang)
         (begin-for-syntax (add-maker! #'#,name #,maker))))
 
+  ;; Identifier Syntax Syntax → [List Identifier Identifier Syntax]
+  ;; Retrieves the a list of the parameter, value for that parameter, and
+  ;; definition, that is up to date for `lang`. This will either retrieving
+  ;; an extension, or lifting the value.
   (define (make-params lang params vals)
     (for/list ([param (in-syntax params)]
                [val (in-syntax vals)])
-      (or (get-lang-extension param val lang)
-          (get-lang-lifting param val lang))))
+      (cons param
+            (or (lang-extension val lang)
+                (lift val lang)))))
 
-  (define (get-lang-extension param val lang)
+  ;; Identifier Identifier → [Or #f [List Identifier Syntax]]
+  ;; If defined, returns the identifier for a user-defined extension.
+  (define (lang-extension val lang)
     (define val* (get-extension val lang))
-    (and val* (list param val* #'(void))))
+    (and val* (list val* #'(void))))
 
-  (define (get-lang-lifting param val lang)
-    (cons param (lift val lang)))
-
+  ;; Identifier Identifier → [List Identifier Syntax]
+  ;; Returns the syntax needed to lift the value to this language.
   (define (lift id lang)
     (define sc (make-syntax-introducer))
     (define id* (sc id))
@@ -125,24 +150,24 @@
 (define-syntax (define-reduction-relation* stx)
   (syntax-parse stx
     [(_ ?name:id ?lang:id ?p:params ?more ...)
-     (redex-form-syntax #'?name
-                        #'?lang
-                        #'(?p.param ...)
-                        #'(?p.val ...)
-                        #'(define-reduction-relation ?name
-                            *LANG* ?more ...))]))
+     (redex-obj-syntax #'?name
+                       #'?lang
+                       #'(?p.param ...)
+                       #'(?p.val ...)
+                       #'(define-reduction-relation ?name
+                           *LANG* ?more ...))]))
 
 (define-syntax (define-extended-reduction-relation* stx)
   (syntax-parse stx
     [(_ ?name:id ?base:id ?lang:id ?p:params ?more ...)
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
-     (redex-form-syntax #'?name
-                        #'?lang
-                        #'(?p.param ...)
-                        #'(?p.val ...)
-                        #'(define-extended-reduction-relation ?name
-                            ?base* *LANG* ?more ...))
+     (redex-obj-syntax #'?name
+                       #'?lang
+                       #'(?p.param ...)
+                       #'(?p.val ...)
+                       #'(define-extended-reduction-relation ?name
+                           ?base* *LANG* ?more ...))
      #`(begin
          ?defn-base ?defn-form
          (begin-for-syntax (add-extension! #'?base #'?lang #'?name)))]))
@@ -157,12 +182,12 @@
   (syntax-parse stx
     [(_ ?lang:id ?p:params ?more ... ?c:mf-case)
      #:with ?name #'?c.name
-     (redex-form-syntax #'?name
-                        #'?lang
-                        #'(?p.param ...)
-                        #'(?p.val ...)
-                        #'(define-metafunction
-                            *LANG* ?more ... ?c))]))
+     (redex-obj-syntax #'?name
+                       #'?lang
+                       #'(?p.param ...)
+                       #'(?p.val ...)
+                       #'(define-metafunction
+                           *LANG* ?more ... ?c))]))
 
 (define-syntax (define-extended-metafunction* stx)
   (syntax-parse stx
@@ -170,12 +195,12 @@
      #:with ?name #'?c.name
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
-     (redex-form-syntax #'?name
-                        #'?lang
-                        #'(?p.param ...)
-                        #'(?p.val ...)
-                        #'(define-extended-metafunction
-                            ?base* *LANG* ?more ... ?c))
+     (redex-obj-syntax #'?name
+                       #'?lang
+                       #'(?p.param ...)
+                       #'(?p.val ...)
+                       #'(define-extended-metafunction
+                           ?base* *LANG* ?more ... ?c))
      #`(begin
          ?defn-base ?defn-form
          (begin-for-syntax (add-extension! #'?base #'?lang #'?name)))]))
@@ -187,12 +212,12 @@
   (syntax-parse stx
     [(_ ?lang:id ?p:params #:mode ?m:mode ?more ...)
      #:with ?name #'?m.name
-     (redex-form-syntax #'?name
-                        #'?lang
-                        #'(?p.param ...)
-                        #'(?p.val ...)
-                        #'(define-judgment-form
-                            *LANG* #:mode ?m ?more ...))]))
+     (redex-obj-syntax #'?name
+                       #'?lang
+                       #'(?p.param ...)
+                       #'(?p.val ...)
+                       #'(define-judgment-form
+                           *LANG* #:mode ?m ?more ...))]))
 
 (define-syntax (define-extended-judgment-form* stx)
   (syntax-parse stx
@@ -200,12 +225,12 @@
      #:with ?name #'?m.name
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
-     (redex-form-syntax #'?name
-                        #'?lang
-                        #'(?p.param ...)
-                        #'(?p.val ...)
-                        #'(define-extended-judgment-form
-                            *LANG* ?base* #:mode ?m ?more ...))
+     (redex-obj-syntax #'?name
+                       #'?lang
+                       #'(?p.param ...)
+                       #'(?p.val ...)
+                       #'(define-extended-judgment-form
+                           *LANG* ?base* #:mode ?m ?more ...))
      #`(begin
          ?defn-base ?defn-form
          (begin-for-syntax (add-extension! #'?base #'?lang #'?name)))]))
