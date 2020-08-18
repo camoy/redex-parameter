@@ -3,7 +3,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; provide
 
-(provide define-reduction-relation
+(provide redex-out
+         define-reduction-relation
          define-extended-reduction-relation
          define-reduction-relation*
          define-extended-reduction-relation*
@@ -18,7 +19,9 @@
 
 (require (for-syntax racket/base
                      racket/match
+                     racket/provide-transform
                      racket/sequence
+                     racket/syntax
                      syntax/id-table
                      syntax/parse
                      syntax/strip-context
@@ -67,6 +70,12 @@
       (free-id-table-set! maker-table id maker)
       (set! maker-table-next #f)))
 
+  ;; TODO
+  (define (merge-maker! id)
+    (define required-maker (syntax-local-value (format-mk id) (λ _ #f)))
+    (when required-maker
+      (free-id-table-merge! maker-table required-maker)))
+
   ;; Identifier Identifier → Syntax
   ;; Returns the syntax needed to define the object `id` for `lang`.
   (define (apply-maker id sc lang)
@@ -75,6 +84,7 @@
              (string-append  "~a was not defined as extensible; "
                              "use the * version of define")
              (syntax-e id)))
+    (merge-maker! id)
     (define maker
       (free-id-table-ref maker-table id not-found))
     (maker sc lang))
@@ -91,14 +101,57 @@
       (free-id-table-ref! extension-table base make-free-id-table))
     (free-id-table-set! lang-table lang name))
 
+  ;; TODO
+  (define (merge-extension! id)
+    (define required-ext (syntax-local-value (format-ext id) (λ _ #f)))
+    (when required-ext
+      (for ([(k v) (in-free-id-table required-ext)])
+        (define v* (free-id-table-ref extension-table k (λ _ #f)))
+        (if v*
+            (free-id-table-merge! v* v)
+            (free-id-table-set! extension-table k v)))))
+
   ;; Identifier Identifier → Identifier
   ;; Retrieves the most recent extension of `base` for `lang`.
   (define (get-extension base lang)
+    (merge-extension! base)
     (define lang-table
       (free-id-table-ref extension-table base (λ _ #f)))
     (and lang-table
          (free-id-table-ref lang-table lang (λ _ #f))))
+
+  ;; TODO
+  (define (free-id-table-merge! a b)
+    (for ([(k v) (in-free-id-table b)]
+          #:when (not (free-id-table-ref a k (λ _ #f))))
+      (free-id-table-set! a k v)))
   )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; provide transformer
+
+(begin-for-syntax
+  ;; TODO
+  (define (format-mk x)
+    (format-id x "~a-mk-table" x))
+
+  ;; TODO
+  (define (format-ext x)
+    (format-id x "~a-ext-table" x))
+  )
+
+;; Provide transformer for exporting the maker and extension tables.
+(define-syntax redex-out
+  (make-provide-transformer
+   (λ (stx modes)
+     (syntax-parse stx
+       [(_ ?x:id ...)
+        #:do [(define xs (syntax->list #'(?x ...)))]
+        #:with (?x-mk ...) (map format-mk xs)
+        #:with (?x-ext ...) (map format-ext xs)
+        (expand-export
+         #'(combine-out ?x ... ?x-mk ... ?x-ext ...)
+         '())]))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; generic parameterized syntax
@@ -125,7 +178,9 @@
     (set! maker-table-next (cons name maker))
     #`(begin
         #,(maker values lang)
-        (begin-for-syntax (add-maker!))))
+        (begin-for-syntax (add-maker!))
+        (define-syntax #,(format-mk name) maker-table))
+        (define-syntax #,(format-ext name) extension-table)))
 
   ;; Identifier Syntax Syntax → [List Identifier Identifier Syntax]
   ;; Retrieves the a list of the parameter, value for that parameter, and
