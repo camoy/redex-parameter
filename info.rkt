@@ -3,7 +3,7 @@
 ;; General
 
 (define collection "redex")
-(define pkg-desc "Extension parameters in Redex.")
+(define pkg-desc "Parameters for extensions in Redex.")
 (define version "0.0")
 (define pkg-authors '(camoy))
 (define scribblings '(("scribblings/redex-parameter.scrbl" ())))
