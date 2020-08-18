@@ -57,23 +57,13 @@
   ;; Maps a redex object identifier to a constructor for that object.
   (define maker-table (make-free-id-table))
 
-  ;; [Or #f [Cons Identifier Procedure]]
-  ;; Hack to avoid 3D syntax. Holds the next association to go in the
-  ;; maker table.
-  (define maker-table-next #f)
-
   ;; → Any
   ;; Adds a constructor for a redex object.
   (define (add-maker! id)
     (define xs (syntax-local-value id (λ _ #f)))
-    (match-define (list name params vals defn) xs)
-    (free-id-table-set! maker-table name (do-maker params vals defn)))
-
-  ;; TODO
-  (define (merge-maker! id)
-    (define required-maker (syntax-local-value (format-mk id) (λ _ #f)))
-    (when required-maker
-      (free-id-table-merge! maker-table required-maker)))
+    (when xs
+      (match-define (list name params vals defn) xs)
+      (free-id-table-set! maker-table name (do-maker params vals defn))))
 
   ;; Identifier Identifier → Syntax
   ;; Returns the syntax needed to define the object `id` for `lang`.
@@ -83,9 +73,8 @@
              (string-append  "~a was not defined as extensible; "
                              "use the * version of define")
              (syntax-e id)))
-    #;(merge-maker! id)
-    (define maker
-      (free-id-table-ref maker-table id not-found))
+    (add-maker! (format-mk id))
+    (define maker (free-id-table-ref maker-table id not-found))
     (maker sc lang))
 
   ;; [Free-Id-Table Identifier [Free-Id-Table Identifier Identifier]
@@ -93,37 +82,24 @@
   ;; the identifier that extends it for that language.
   (define extension-table (make-free-id-table))
 
-  ;; Identifier Identifier Identifier → Any
+  ;; Identifier → Any
   ;; Add the given extension to the table of extensions.
-  (define (add-extension! base lang name)
-    (define lang-table
-      (free-id-table-ref! extension-table base make-free-id-table))
-    (free-id-table-set! lang-table lang name))
-
-  ;; TODO
-  (define (merge-extension! id)
-    (define required-ext (syntax-local-value (format-ext id) (λ _ #f)))
-    (when required-ext
-      (for ([(k v) (in-free-id-table required-ext)])
-        (define v* (free-id-table-ref extension-table k (λ _ #f)))
-        (if v*
-            (free-id-table-merge! v* v)
-            (free-id-table-set! extension-table k v)))))
+  (define (add-extension! id)
+    (define xs (syntax-local-value id (λ _ #f)))
+    (when xs
+      (match-define (list base lang name) xs)
+      (define lang-table
+        (free-id-table-ref! extension-table base make-free-id-table))
+      (free-id-table-set! lang-table lang name)))
 
   ;; Identifier Identifier → Identifier
   ;; Retrieves the most recent extension of `base` for `lang`.
   (define (get-extension base lang)
-    (merge-extension! base)
+    (add-extension! (format-ext base))
     (define lang-table
       (free-id-table-ref extension-table base (λ _ #f)))
     (and lang-table
          (free-id-table-ref lang-table lang (λ _ #f))))
-
-  ;; TODO
-  (define (free-id-table-merge! a b)
-    (for ([(k v) (in-free-id-table b)]
-          #:when (not (free-id-table-ref a k (λ _ #f))))
-      (free-id-table-set! a k v)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -170,24 +146,21 @@
   ;; Identifier Identifier Syntax Syntax Syntax → Syntax
   ;; Returns syntax that defines the object (according to `defn`) parameterized
   ;; appropriately for `lang`.
-  (define (redex-obj-syntax name lang params vals defn)
-    #;(define (maker sc lang)
-      (define stx (make-params sc lang params vals))
-      (with-syntax ([?lang (sc #'*LANG*)]
-                    [([?param ?val ?lift] ...) stx])
-        #`(begin
-            ?lift ...
-            (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
-                                  [?param (make-rename-transformer #'?val)]
-                                  ...)
-              #,(sc defn)))))
-    #;(define-syntax #,(format-ext name) extension-table)
+  (define (redex-obj-syntax name base lang params vals defn)
     (define mk-id (format-mk name))
+    (define ext-id (format-ext name))
     #`(begin
         #,((do-maker params vals defn) values lang)
+
         (define-syntax #,mk-id
           (list #'#,name #'#,params #'#,vals #'((... ...) #,defn)))
-        (begin-for-syntax (add-maker! #'#,mk-id))))
+        (begin-for-syntax (add-maker! #'#,mk-id))
+
+        (define-syntax #,ext-id
+          #,(if base
+                #`(list #'#,base #'#,lang #'#,name)
+                #'#f))
+        (begin-for-syntax (add-extension! #'#,ext-id))))
 
   ;; Identifier Syntax Syntax → [List Identifier Identifier Syntax]
   ;; Retrieves the a list of the parameter, value for that parameter, and
@@ -229,6 +202,7 @@
   (syntax-parse stx
     [(_ ?name:id ?lang:id ?p:params ?more ...)
      (redex-obj-syntax #'?name
+                       #f
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
@@ -241,14 +215,14 @@
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
      (redex-obj-syntax #'?name
+                       #'?base
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-reduction-relation ?name
                            ?base* *LANG* ?more ...))
-     #`(begin
-         ?defn-base ?defn-form
-         (begin-for-syntax (add-extension! #'?base #'?lang #'?name)))]))
+     (define ext-id (format-ext #'?name))
+     #`(begin ?defn-base ?defn-form)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; metafunction
@@ -261,6 +235,7 @@
     [(_ ?lang:id ?p:params ?more ... ?c:mf-case)
      #:with ?name #'?c.name
      (redex-obj-syntax #'?name
+                       #f
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
@@ -274,14 +249,13 @@
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
      (redex-obj-syntax #'?name
+                       #'?base
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-metafunction
                            ?base* *LANG* ?more ... ?c))
-     #`(begin
-         ?defn-base ?defn-form
-         (begin-for-syntax (add-extension! #'?base #'?lang #'?name)))]))
+     #`(begin ?defn-base ?defn-form)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; judgment form
@@ -291,6 +265,7 @@
     [(_ ?lang:id ?p:params #:mode ?m:mode ?more ...)
      #:with ?name #'?m.name
      (redex-obj-syntax #'?name
+                       #f
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
@@ -304,14 +279,13 @@
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
      (redex-obj-syntax #'?name
+                       #'?base
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-judgment-form
                            *LANG* ?base* #:mode ?m ?more ...))
-     #`(begin
-         ?defn-base ?defn-form
-         (begin-for-syntax (add-extension! #'?base #'?lang #'?name)))]))
+     #`(begin ?defn-base ?defn-form)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; test
