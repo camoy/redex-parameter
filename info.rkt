@@ -3,10 +3,11 @@
 ;; General
 
 (define collection "redex")
-(define pkg-desc "Parameterized reduction relations in Redex.")
+(define pkg-desc "Extension parameters in Redex.")
 (define version "0.0")
 (define pkg-authors '(camoy))
 (define scribblings '(("scribblings/redex-parameter.scrbl" ())))
+(define compile-omit-paths '("test"))
 
 ;; Dependencies
 
@@ -15,7 +16,8 @@
     "redex-lib"))
 
 (define build-deps
-  '("scribble-lib"
+  '("chk-lib"
+    "scribble-lib"
     "racket-doc"
     "rackunit-lib"
     "redex-doc"
