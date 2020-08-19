@@ -23,7 +23,8 @@
                      racket/sequence
                      racket/syntax
                      syntax/id-table
-                     syntax/parse)
+                     syntax/parse
+                     syntax/strip-context)
          racket/splicing
          redex/reduction-semantics)
 
@@ -139,7 +140,8 @@
   ;; language.
   (define ((do-maker name params vals defn) sc lang)
     (define stx (make-params sc lang params vals))
-    (with-syntax ([?lang (sc #'*LANG*)]
+    (define defn* (sc defn))
+    (with-syntax ([?lang (replace-context defn* #'*LANG*)]
                   [([?param ?val ?lift] ...) stx])
       (values
        (sc name)
@@ -148,7 +150,7 @@
            (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
                                  [?param (make-rename-transformer #'?val)]
                                  ...)
-             #,(sc defn))))))
+             #,defn*)))))
 
   ;; Identifier Identifier Identifier Syntax Syntax Syntax → Syntax
   ;; Returns syntax that defines the object (according to `defn`) parameterized
