@@ -52,23 +52,23 @@
 
 (begin-for-syntax
   ;; [Free-Id-Table Identifier Procedure]
-  ;; Maps a redex object identifier to a constructor for that object.
+  ;; Maps a Redex object identifier to a constructor for that object.
   (define maker-table (make-free-id-table))
 
   ;; → Any
-  ;; Adds a constructor for a redex object.
+  ;; Adds a constructor for a Redex object.
   (define (add-maker! id)
     (define xs (syntax-local-value id (λ _ #f)))
     (when xs
-      (match-define (list name params vals defn) xs)
-      (free-id-table-set! maker-table name (do-maker name params vals defn))))
+      (define name (car xs))
+      (free-id-table-set! maker-table name (apply do-maker xs))))
 
-  ;; Identifier Identifier → Syntax
+  ;; Identifier Procedure Identifier → Syntax
   ;; Returns the syntax needed to define the object `id` for `lang`.
   (define (apply-maker id sc lang)
     (define (not-found)
       (error 'redex-parameter
-             (string-append  "~a was not defined as extensible; "
+             (string-append  "~a was not defined as liftable; "
                              "use the * version of define")
              (syntax-e id)))
     (add-maker! (format-mk id))
@@ -76,7 +76,7 @@
     (maker sc lang))
 
   ;; [Free-Id-Table Identifier [Free-Id-Table Identifier Identifier]
-  ;; A two-level table mapping a redex object identifier and a language to
+  ;; A two-level table mapping a Redex object identifier and a language to
   ;; the identifier that extends it for that language.
   (define extension-table (make-free-id-table))
 
@@ -104,11 +104,13 @@
 ;; provide transformer
 
 (begin-for-syntax
-  ;; TODO
+  ;; Identifier → Identifier
+  ;; Returns the identifier for recording a `maker-table` entry.
   (define (format-mk x)
     (format-id x "~a-mk-table" x))
 
-  ;; TODO
+  ;; Identifier → Identifier
+  ;; Returns the identifier for recording an `extension-table` entry.
   (define (format-ext x)
     (format-id x "~a-ext-table" x))
   )
@@ -130,19 +132,25 @@
 ;; generic parameterized syntax
 
 (begin-for-syntax
+  ;; Identifier Syntax Syntax Syntax → (Procedure Identifier → Identifier Syntax)
+  ;; This will construct a "maker" from a bunch of syntaxes. The maker takes
+  ;; a scope introducer and a language, and returns the identifier being defined
+  ;; (with the scope attached) as well as the definition itself, for the provided
+  ;; language.
   (define ((do-maker name params vals defn) sc lang)
     (define stx (make-params sc lang params vals))
     (with-syntax ([?lang (sc #'*LANG*)]
                   [([?param ?val ?lift] ...) stx])
-      (values (sc name)
-              #`(begin
-                  ?lift ...
-                  (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
-                                        [?param (make-rename-transformer #'?val)]
-                                        ...)
-                    #,(sc defn))))))
+      (values
+       (sc name)
+       #`(begin
+           ?lift ...
+           (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
+                                 [?param (make-rename-transformer #'?val)]
+                                 ...)
+             #,(sc defn))))))
 
-  ;; Identifier Identifier Syntax Syntax Syntax → Syntax
+  ;; Identifier Identifier Identifier Syntax Syntax Syntax → Syntax
   ;; Returns syntax that defines the object (according to `defn`) parameterized
   ;; appropriately for `lang`.
   (define (redex-obj-syntax name base lang params vals defn)
@@ -150,19 +158,22 @@
     (define ext-id (format-ext name))
     (define-values (_ stx) ((do-maker name params vals defn) values lang))
     #`(begin
+        ;; Definition
         #,stx
 
+        ;; For maker table
         (define-syntax #,mk-id
           (list #'#,name #'#,params #'#,vals #'((... ...) #,defn)))
         (begin-for-syntax (add-maker! #'#,mk-id))
 
+        ;; For extension table
         (define-syntax #,ext-id
           #,(if base
                 #`(list #'#,base #'#,lang #'#,name)
                 #'#f))
         (begin-for-syntax (add-extension! #'#,ext-id))))
 
-  ;; Identifier Syntax Syntax → [List Identifier Identifier Syntax]
+  ;; Procedure Identifier Syntax Syntax → [List Identifier Identifier Syntax]
   ;; Retrieves the a list of the parameter, value for that parameter, and
   ;; definition, that is up to date for `lang`. This will either retrieving
   ;; an extension, or lifting the value.

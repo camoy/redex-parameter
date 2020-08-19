@@ -10,8 +10,9 @@
 ;; test
 
 (module+ test
-  (provide L0 L1 (redex-out foo-mf0 foo-jf0
-                            r0-mf r0-jf r0-rr))
+  (provide L0 L1
+           (redex-out foo-mf0 foo-jf0
+                      r0-mf r0-jf r0-rr))
 
   (require chk
            racket/set)
@@ -30,8 +31,12 @@
   ;; Reduction Relations
   ;;
 
+  ;; This is to make sure that locally-defined identifiers are correctly
+  ;; exported.
+  (define (identity x) x)
+
   (define-metafunction* L0
-    [(foo-mf0 m) 0])
+    [(foo-mf0 m) ,(identity 0)])
 
   (define-judgment-form* L0
     #:mode (foo-jf0 I O)
