@@ -20,6 +20,7 @@
   ;;
 
   (define-extended-metafunction* foo-mf0 L1
+    foo-mf1 : m -> m
     [(foo-mf1 m) 1.75])
 
   (define-extended-judgment-form* foo-jf0 L1

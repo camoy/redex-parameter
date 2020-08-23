@@ -36,6 +36,7 @@
   (define (identity x) x)
 
   (define-metafunction* L0
+    foo-mf0 : m -> m
     [(foo-mf0 m) ,(identity 0)])
 
   (define-judgment-form* L0
@@ -84,6 +85,7 @@
   ;;
 
   (define-extended-metafunction* foo-mf0 L1
+    foo-mf1 : m -> m
     [(foo-mf1 m) 1.5])
 
   (define-extended-judgment-form* foo-jf0 L1
@@ -105,6 +107,7 @@
   ;;
 
   (define-metafunction* L0
+    bar-mf0 : m -> m
     [(bar-mf0 m) 0])
 
   (define-judgment-form* L0
