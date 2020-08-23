@@ -205,6 +205,7 @@ or parameterize a metafunction by a reduction relation.
   Defines a parameterized metafunction.
   Aside from parameters,
   the syntax is the same as in @racket[define-metafunction].
+  Parameterized metafunctions must have a contract.
 }
 
 @defform[(define-extended-metafunction* metafunction-id language
@@ -218,6 +219,7 @@ or parameterize a metafunction by a reduction relation.
   that extends @racket[metafunction-id].
   Aside from parameters,
   the syntax is the same as in @racket[define-metafunction/extension].
+  Parameterized metafunctions must have a contract.
 }
 
 @defform[(define-judgment-form* language

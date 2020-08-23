@@ -39,10 +39,6 @@
              #:attr (param 1) null
              #:attr (val 1) null))
 
-  ;; For extracting the name from a metafunction.
-  (define-syntax-class mf-case
-    (pattern [(name:id _ ...) _ ...]))
-
   ;; Similar, but for a judgment.
   (define-syntax-class mode
     (pattern (name:id _ ...)))
@@ -243,20 +239,18 @@
 
 (define-syntax (define-metafunction* stx)
   (syntax-parse stx
-    [(_ ?lang:id ?p:params ?more ... ?c:mf-case)
-     #:with ?name #'?c.name
+    [(_ ?lang:id ?p:params ?name:id ?more ...)
      (redex-obj-syntax #'?name
                        #f
                        #'?lang
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-metafunction
-                           *LANG* ?more ... ?c))]))
+                           *LANG* ?name ?more ...))]))
 
 (define-syntax (define-extended-metafunction* stx)
   (syntax-parse stx
-    [(_ ?base:id ?lang:id ?p:params ?more ... ?c:mf-case)
-     #:with ?name #'?c.name
+    [(_ ?base:id ?lang:id ?p:params ?name:id ?more ...)
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
      (redex-obj-syntax #'?name
@@ -265,7 +259,7 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-metafunction
-                           ?base* *LANG* ?more ... ?c))
+                           ?base* *LANG* ?name ?more ...))
      #`(begin ?defn-base ?defn-form)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
