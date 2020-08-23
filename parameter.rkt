@@ -22,6 +22,7 @@
                      racket/provide-transform
                      racket/sequence
                      racket/syntax
+                     redex/private/term-fn
                      syntax/id-table
                      syntax/parse
                      syntax/strip-context)
@@ -129,14 +130,16 @@
 ;; generic parameterized syntax
 
 (begin-for-syntax
-  ;; Identifier Syntax Syntax Syntax → (Procedure Identifier → Identifier Syntax)
+  ;; Identifier Syntax Syntax Syntax {Identifier} →
+  ;;   (Procedure Identifier → Identifier Syntax)
   ;; This will construct a "maker" from a bunch of syntaxes. The maker takes
   ;; a scope introducer and a language, and returns the identifier being defined
   ;; (with the scope attached) as well as the definition itself, for the provided
   ;; language.
-  (define ((do-maker name params vals defn) sc lang)
+  (define ((do-maker name params vals defn [who #f]) sc lang)
     (define stx (make-params sc lang params vals))
     (define defn* (sc defn))
+    (check-language lang (and who (syntax-e who)))
     (with-syntax ([?lang (replace-context defn* #'*LANG*)]
                   [([?param ?val ?lift] ...) stx])
       (values
@@ -148,13 +151,18 @@
                                  ...)
              #,defn*)))))
 
-  ;; Identifier Identifier Identifier Syntax Syntax Syntax → Syntax
+  ;; Syntax Symbol → Any
+  ;; Checks that the identifier corresponds to a language.
+  (define (check-language stx sym)
+    (language-id-nts stx (or sym 'check-language)))
+
+  ;; Identifier Identifier Identifier Identifier Syntax Syntax Syntax → Syntax
   ;; Returns syntax that defines the object (according to `defn`) parameterized
   ;; appropriately for `lang`.
-  (define (redex-obj-syntax name base lang params vals defn)
+  (define (redex-obj-syntax who name base lang params vals defn)
     (define mk-id (format-mk name))
     (define ext-id (format-ext name))
-    (define-values (_ stx) ((do-maker name params vals defn) values lang))
+    (define-values (_ stx) ((do-maker name params vals defn who) values lang))
     #`(begin
         ;; Definition
         #,stx
@@ -207,8 +215,9 @@
 
 (define-syntax (define-reduction-relation* stx)
   (syntax-parse stx
-    [(_ ?name:id ?lang:id ?p:params ?more ...)
-     (redex-obj-syntax #'?name
+    [(?who:id ?name:id ?lang:id ?p:params ?more ...)
+     (redex-obj-syntax #'?who
+                       #'?name
                        #f
                        #'?lang
                        #'(?p.param ...)
@@ -218,10 +227,11 @@
 
 (define-syntax (define-extended-reduction-relation* stx)
   (syntax-parse stx
-    [(_ ?name:id ?base:id ?lang:id ?p:params ?more ...)
+    [(?who:id ?name:id ?base:id ?lang:id ?p:params ?more ...)
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
-     (redex-obj-syntax #'?name
+     (redex-obj-syntax #'?who
+                       #'?name
                        #'?base
                        #'?lang
                        #'(?p.param ...)
@@ -239,8 +249,9 @@
 
 (define-syntax (define-metafunction* stx)
   (syntax-parse stx
-    [(_ ?lang:id ?p:params ?name:id ?more ...)
-     (redex-obj-syntax #'?name
+    [(?who:id ?lang:id ?p:params ?name:id ?more ...)
+     (redex-obj-syntax #'?who
+                       #'?name
                        #f
                        #'?lang
                        #'(?p.param ...)
@@ -250,10 +261,11 @@
 
 (define-syntax (define-extended-metafunction* stx)
   (syntax-parse stx
-    [(_ ?base:id ?lang:id ?p:params ?name:id ?more ...)
+    [(?who:id ?base:id ?lang:id ?p:params ?name:id ?more ...)
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
-     (redex-obj-syntax #'?name
+     (redex-obj-syntax #'?who
+                       #'?name
                        #'?base
                        #'?lang
                        #'(?p.param ...)
@@ -267,9 +279,10 @@
 
 (define-syntax (define-judgment-form* stx)
   (syntax-parse stx
-    [(_ ?lang:id ?p:params #:mode ?m:mode ?more ...)
+    [(?who:id ?lang:id ?p:params #:mode ?m:mode ?more ...)
      #:with ?name #'?m.name
-     (redex-obj-syntax #'?name
+     (redex-obj-syntax #'?who
+                       #'?name
                        #f
                        #'?lang
                        #'(?p.param ...)
@@ -279,11 +292,12 @@
 
 (define-syntax (define-extended-judgment-form* stx)
   (syntax-parse stx
-    [(_ ?base:id ?lang:id #:mode ?m:mode ?p:params ?more ...)
+    [(?who:id ?base:id ?lang:id #:mode ?m:mode ?p:params ?more ...)
      #:with ?name #'?m.name
      #:with [?base* ?defn-base] (lift #'?base #'?lang)
      #:with ?defn-form
-     (redex-obj-syntax #'?name
+     (redex-obj-syntax #'?who
+                       #'?name
                        #'?base
                        #'?lang
                        #'(?p.param ...)
