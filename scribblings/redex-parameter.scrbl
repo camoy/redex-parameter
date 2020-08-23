@@ -44,6 +44,7 @@ in our reduction relation.
     [m ::= number])
 
   (define-metafunction L0
+    L0-number-bad : m -> m
     [(L0-number-bad m) 0])
 
   (define-reduction-relation r0-bad
@@ -94,6 +95,7 @@ defined with
 
 @examples[#:eval evaluator #:no-result
   (define-metafunction* L0
+    L0-number : m -> m
     [(L0-number m) 0])
 
   (define-reduction-relation* r0
@@ -138,6 +140,7 @@ the original metafunction.
 
 @examples[#:eval evaluator #:label #f
   (define-extended-metafunction* L0-number L1
+    L1-number : m -> m
     [(L1-number m) 1])
   (define-extended-reduction-relation* r1* r0 L1)
   (apply-reduction-relation r1* "hi")]
