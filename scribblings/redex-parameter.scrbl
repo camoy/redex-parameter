@@ -163,12 +163,6 @@ or parameterize a metafunction by a reduction relation.
 
 @section{Reference}
 
-@defform[(redex-out id ...)]{
-  Exports the given parameterized objects.
-  Without this,
-  the provided objects will not be recognized as liftable.
-}
-
 @defform[(define-reduction-relation* id
            language parameters
            domain codomain base-arrow

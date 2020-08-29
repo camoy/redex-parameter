@@ -11,8 +11,8 @@
 
 (module+ test
   (provide L0 L1
-           (redex-out foo-mf0 foo-jf0
-                      r0-mf r0-jf r0-rr))
+           foo-mf0 foo-jf0
+           r0-mf r0-jf r0-rr)
 
   (require chk
            racket/set)

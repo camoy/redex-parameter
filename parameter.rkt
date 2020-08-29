@@ -3,8 +3,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; provide
 
-(provide redex-out
-         define-reduction-relation
+(provide define-reduction-relation
          define-extended-reduction-relation
          define-reduction-relation*
          define-extended-reduction-relation*
@@ -40,150 +39,73 @@
              #:attr (param 1) null
              #:attr (val 1) null))
 
-  ;; Similar, but for a judgment.
+  ;; Mode for a judgment.
   (define-syntax-class mode
     (pattern (name:id _ ...)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; compile-time tables
+;; redex object
 
 (begin-for-syntax
-  ;; [Free-Id-Table Identifier Procedure]
-  ;; Maps a Redex object identifier to a constructor for that object.
-  (define maker-table (make-free-id-table))
+  ;; A Redex-Obj is a rename trasformer struct where
+  ;;   [id : Identifier] is the defined identifier,
+  ;;   [args : [Listof Syntax]] is the syntaxes needed for the maker,
+  ;;   [exts : [Free-Id-Table Identifier]] maps languages to extensions.
+  (struct redex-obj (id args exts) #:property prop:rename-transformer 0)
 
-  ;; → Any
-  ;; Adds a constructor for a Redex object.
-  (define (add-maker! id)
-    (define xs (syntax-local-value id (λ _ #f)))
-    (when xs
-      (define name (car xs))
-      (free-id-table-set! maker-table name (apply do-maker xs))))
-
-  ;; Identifier Procedure Identifier → Syntax
-  ;; Returns the syntax needed to define the object `id` for `lang`.
-  (define (apply-maker id sc lang)
-    (define (not-found)
-      (error 'redex-parameter
-             (string-append  "~a was not defined as liftable; "
-                             "use the * version of define")
-             (syntax-e id)))
-    (add-maker! (format-mk id))
-    (define maker (free-id-table-ref maker-table id not-found))
-    (maker sc lang))
-
-  ;; [Free-Id-Table Identifier [Free-Id-Table Identifier Identifier]
-  ;; A two-level table mapping a Redex object identifier and a language to
-  ;; the identifier that extends it for that language.
-  (define extension-table (make-free-id-table))
-
-  ;; Identifier → Any
-  ;; Add the given extension to the table of extensions.
-  (define (add-extension! id)
-    (define xs (syntax-local-value id (λ _ #f)))
-    (when xs
-      (match-define (list base lang name) xs)
-      (define lang-table
-        (free-id-table-ref! extension-table base make-free-id-table))
-      (free-id-table-set! lang-table lang name)))
-
-  ;; Identifier Identifier → Identifier
-  ;; Retrieves the most recent extension of `base` for `lang`.
-  (define (get-extension base lang)
-    (add-extension! (format-ext base))
-    (define lang-table
-      (free-id-table-ref extension-table base (λ _ #f)))
-    (and lang-table
-         (free-id-table-ref lang-table lang (λ _ #f))))
-  )
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; provide transformer
-
-(begin-for-syntax
-  ;; Identifier → Identifier
-  ;; Returns the identifier for recording a `maker-table` entry.
-  (define (format-mk x)
-    (format-id x "~a-mk-table" x))
-
-  ;; Identifier → Identifier
-  ;; Returns the identifier for recording an `extension-table` entry.
-  (define (format-ext x)
-    (format-id x "~a-ext-table" x))
-  )
-
-;; Provide transformer for exporting the maker and extension tables.
-(define-syntax redex-out
-  (make-provide-transformer
-   (λ (stx modes)
-     (syntax-parse stx
-       [(_ ?x:id ...)
-        #:do [(define xs (syntax->list #'(?x ...)))]
-        #:with (?x-mk ...) (map format-mk xs)
-        #:with (?x-ext ...) (map format-ext xs)
-        (expand-export
-         #'(combine-out ?x ... ?x-mk ... ?x-ext ...)
-         '())]))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; generic parameterized syntax
-
-(begin-for-syntax
-  ;; Identifier Syntax Syntax Syntax {Identifier} →
+  ;; Identifier Identifier Syntax Syntax Syntax →
   ;;   (Procedure Identifier → Identifier Syntax)
   ;; This will construct a "maker" from a bunch of syntaxes. The maker takes
   ;; a scope introducer and a language, and returns the identifier being defined
-  ;; (with the scope attached) as well as the definition itself, for the provided
+  ;; (with the scope attached) as well as the definition itself, at the provided
   ;; language.
-  (define ((do-maker name params vals defn [who #f]) sc lang)
-    (define stx (make-params sc lang params vals))
+  (define ((redex-obj-maker who name base params vals defn) sc lang)
+    (define param-stx (make-params params vals sc lang))
     (define defn* (sc defn))
-    (check-language lang (and who (syntax-e who)))
     (with-syntax ([?lang (replace-context defn* #'*LANG*)]
-                  [([?param ?val ?lift] ...) stx])
-      (values
-       (sc name)
-       #`(begin
-           ?lift ...
-           (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
-                                 [?param (make-rename-transformer #'?val)]
-                                 ...)
-             #,defn*)))))
+                  [([?param ?val ?lift] ...) param-stx])
+      (values (sc name)
+              #`(begin
+                  ?lift ...
+                  (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
+                                        [?param (make-rename-transformer #'?val)]
+                                        ...)
+                    #,defn*)))))
+
+  ;; Identifier Identifier Identifier Identifier Syntax Syntax Syntax → Syntax
+  ;; Returns syntax that defines the object (according to `defn`) parameterized
+  ;; appropriately for `lang`.
+  (define (redex-obj-syntax who name base lang params vals defn)
+    (define sc (make-syntax-introducer))
+    (check-language lang (and who (syntax-e who)))
+    (define maker (redex-obj-maker who name base params vals defn))
+    (define-values (name* defn*) (maker sc lang))
+    (define name** (syntax-property name* 'not-free-identifier=? #t))
+    #`(begin
+        #,defn*
+        (define-syntax #,name
+          (redex-obj #'#,name**
+                     (list #'#,who
+                           #'#,name
+                           #'#,base
+                           #'#,params
+                           #'#,vals
+                           #'((... ...) #,defn))
+                     (make-free-id-table)))
+        (begin-for-syntax
+          (redex-obj-add-ext! #'#,name #'#,base #'#,lang))))
 
   ;; Syntax Symbol → Any
   ;; Checks that the identifier corresponds to a language.
   (define (check-language stx sym)
     (language-id-nts stx (or sym 'check-language)))
 
-  ;; Identifier Identifier Identifier Identifier Syntax Syntax Syntax → Syntax
-  ;; Returns syntax that defines the object (according to `defn`) parameterized
-  ;; appropriately for `lang`.
-  (define (redex-obj-syntax who name base lang params vals defn)
-    (define mk-id (format-mk name))
-    (define ext-id (format-ext name))
-    (define-values (_ stx) ((do-maker name params vals defn who) values lang))
-    #`(begin
-        ;; Definition
-        #,stx
-
-        ;; For maker table
-        (define-syntax #,mk-id
-          (list #'#,name #'#,params #'#,vals #'((... ...) #,defn)))
-        (begin-for-syntax (add-maker! #'#,mk-id))
-
-        ;; For extension table
-        (define-syntax #,ext-id
-          #,(if base
-                #`(list #'#,base #'#,lang #'#,name)
-                #'#f))
-        (begin-for-syntax (add-extension! #'#,ext-id))))
-
   ;; Procedure Identifier Syntax Syntax → [List Identifier Identifier Syntax]
-  ;; Retrieves the a list of the parameter, value for that parameter, and
-  ;; definition, that is up to date for `lang`. This will either retrieving
-  ;; an extension, or lifting the value.
-  (define (make-params sc lang params vals)
+  ;; Retrieves the list of the parameter, value for that parameter, and
+  ;; definition; they are up to date for `lang`. This will either retrieve
+  ;; an extension, or lift the value.
+  (define (make-params params vals sc lang)
     (for/list ([param (in-syntax params)]
                [val (in-syntax vals)])
       (cons (sc param)
@@ -193,15 +115,37 @@
   ;; Identifier Identifier → [Or #f [List Identifier Syntax]]
   ;; If defined, returns the identifier for a user-defined extension.
   (define (lang-extension val lang)
-    (define val* (get-extension val lang))
+    (define exts (redex-obj-exts (redex-obj-get val)))
+    (define val* (free-id-table-ref exts lang (λ _ #f)))
     (and val* (list val* #'(void))))
 
   ;; Identifier Identifier → [List Identifier Syntax]
   ;; Returns the syntax needed to lift the value to this language.
   (define (lift id lang)
+    (define args (redex-obj-args (redex-obj-get id)))
     (define sc (make-syntax-introducer))
-    (define-values (defn-id defn) (apply-maker id sc lang))
-    (list defn-id defn))
+    (define-values (lifted-id lifted-defn)
+      ((apply redex-obj-maker args) sc lang))
+    (list lifted-id lifted-defn))
+
+  ;; Identifier → Redex-Obj
+  ;; Gets the Redex object associated with the given identifier.
+  (define (redex-obj-get id)
+    (define-values (obj _)
+      (syntax-local-value/immediate id (λ _ (values #f #f))))
+    (unless (redex-obj? obj)
+      (define MSG
+        (string-append "not defined as liftable; "
+                       "use the * version of define"))
+      (raise-syntax-error #f MSG id))
+    obj)
+
+  ;; Identifier Identifier Identifier → Any
+  ;; Register an extension with the base's internal extension table.
+  (define (redex-obj-add-ext! name base lang)
+    (when (syntax-e base)
+      (define exts (redex-obj-exts (redex-obj-get base)))
+      (free-id-table-set! exts lang name)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -238,7 +182,6 @@
                        #'(?p.val ...)
                        #'(define-extended-reduction-relation ?name
                            ?base* *LANG* ?more ...))
-     (define ext-id (format-ext #'?name))
      #`(begin ?defn-base ?defn-form)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
