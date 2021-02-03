@@ -103,7 +103,7 @@ defined with
     #:parameters ([lang-number L0-number])
     [--> m (lang-number m)])]
 
-We'ved replace the non-starred variants from earlier,
+We've replaced the non-starred variants from earlier,
 with their starred counterparts.
 Using the starred form gets you two things:
 @itemlist[
