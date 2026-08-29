@@ -108,16 +108,20 @@
   (define (make-params params vals sc lang)
     (for/list ([param (in-syntax params)]
                [val (in-syntax vals)])
-      (cons (sc param)
-            (or (lang-extension val lang)
-                (lift val lang)))))
+      (cons (sc param) (lang-extension val lang))))
 
   ;; Identifier Identifier → [Or #f [List Identifier Syntax]]
-  ;; If defined, returns the identifier for a user-defined extension.
+  ;; If defined, returns the identifier for a user-defined extension or
+  ;; an automatically lifted version.
   (define (lang-extension val lang)
     (define exts (redex-obj-exts (redex-obj-get val)))
     (define val* (free-id-table-ref exts lang (λ _ #f)))
-    (and val* (list val* #'(void))))
+    (cond
+      [val* (list val* #'(void))]
+      [else
+       (define result (lift val lang))
+       (free-id-table-set! exts lang (car result))
+       result]))
 
   ;; Identifier Identifier → [List Identifier Syntax]
   ;; Returns the syntax needed to lift the value to this language.
