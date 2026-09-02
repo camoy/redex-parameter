@@ -157,4 +157,18 @@
   (chk
    (term (direct 42)) 1
    (term (after 42)) 1
+   )
+
+  ;; A second explicit extension must invalidate the transitive automatic lift
+  ;; of `middle` cached while defining `after`.
+  (define-extended-metafunction* leaf M
+    newer-leaf : e -> e
+    [(newer-leaf e) 2])
+
+  (define-metafunction* M #:parameters ([current-middle middle])
+    after-again : e -> e
+    [(after-again e) (current-middle e)])
+
+  (chk
+   (term (after-again 42)) 2
    ))

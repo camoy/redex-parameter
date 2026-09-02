@@ -48,11 +48,31 @@
 ;; redex object
 
 (begin-for-syntax
+  ;; An Automatic-Lift is a memoized expansion artifact containing its generated
+  ;; identifier and the language generation under which it was built.
+  (struct automatic-lift (id generation))
+
   ;; A Redex-Obj is a rename trasformer struct where
   ;;   [id : Identifier] is the defined identifier,
   ;;   [args : [Listof Syntax]] is the syntaxes needed for the maker,
-  ;;   [exts : [Free-Id-Table Identifier]] maps languages to extensions.
-  (struct redex-obj (id args exts) #:property prop:rename-transformer 0)
+  ;;   [exts : [Free-Id-Table Identifier]] maps languages to explicit semantic
+  ;;     definitions, and
+  ;;   [lifts : [Free-Id-Table Automatic-Lift]] maps languages to memoized
+  ;;     automatic expansion artifacts.
+  (struct redex-obj (id args exts lifts) #:property prop:rename-transformer 0)
+
+  ;; Maps each language to the generation of its explicit semantic definitions.
+  (define language-generations (make-free-id-table))
+
+  ;; Identifier → Natural
+  (define (language-generation lang)
+    (free-id-table-ref language-generations lang (λ _ 0)))
+
+  ;; Identifier → Any
+  (define (advance-language-generation! lang)
+    (free-id-table-set! language-generations
+                        lang
+                        (add1 (language-generation lang))))
 
   ;; Identifier Identifier Syntax Syntax Syntax →
   ;;   (Procedure Identifier → Identifier Syntax)
@@ -92,6 +112,7 @@
                            #'#,params
                            #'#,vals
                            #'((... ...) #,defn))
+                     (make-free-id-table)
                      (make-free-id-table)))
         (begin-for-syntax
           (redex-obj-add-ext! #'#,name #'#,base #'#,lang))))
@@ -103,14 +124,14 @@
 
   ;; Procedure Identifier Syntax Syntax → [List Identifier Identifier Syntax]
   ;; Retrieves the list of the parameter, value for that parameter, and
-  ;; definition; they are up to date for `lang`. This will either retrieve
-  ;; an extension, or lift the value.
+  ;; definition; they are up to date for `lang`. Explicit semantic definitions
+  ;; take precedence over memoized automatic lifts.
   (define (make-params params vals sc lang)
     (for/list ([param (in-syntax params)]
                [val (in-syntax vals)])
       (cons (sc param)
             (or (lang-extension val lang)
-                (lift val lang)))))
+                (lang-automatic-lift val lang)))))
 
   ;; Identifier Identifier → [Or #f [List Identifier Syntax]]
   ;; If defined, returns the identifier for a user-defined extension.
@@ -118,6 +139,23 @@
     (define exts (redex-obj-exts (redex-obj-get val)))
     (define val* (free-id-table-ref exts lang (λ _ #f)))
     (and val* (list val* #'(void))))
+
+  ;; Identifier Identifier → [List Identifier Syntax]
+  ;; Reuses a memoized automatic lift when it was built under the current
+  ;; language generation; otherwise rebuilds and caches it.
+  (define (lang-automatic-lift val lang)
+    (define lifts (redex-obj-lifts (redex-obj-get val)))
+    (define generation (language-generation lang))
+    (define cached (free-id-table-ref lifts lang (λ _ #f)))
+    (cond
+      [(and cached (= (automatic-lift-generation cached) generation))
+       (list (automatic-lift-id cached) #'(void))]
+      [else
+       (define result (lift val lang))
+       (free-id-table-set! lifts
+                           lang
+                           (automatic-lift (car result) generation))
+       result]))
 
   ;; Identifier Identifier → [List Identifier Syntax]
   ;; Returns the syntax needed to lift the value to this language.
@@ -141,11 +179,13 @@
     obj)
 
   ;; Identifier Identifier Identifier → Any
-  ;; Register an extension with the base's internal extension table.
+  ;; Register an explicit semantic definition and advance its language's
+  ;; generation, invalidating memoized automatic lifts for that language.
   (define (redex-obj-add-ext! name base lang)
     (when (syntax-e base)
       (define exts (redex-obj-exts (redex-obj-get base)))
-      (free-id-table-set! exts lang name)))
+      (free-id-table-set! exts lang name)
+      (advance-language-generation! lang)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
