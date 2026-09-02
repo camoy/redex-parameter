@@ -121,4 +121,40 @@
   (chk
    #:t (judgment-holds (bar-jf0 0 0))
    #:t (judgment-holds (bar-jf1 "bar" 0))
+   )
+
+  ;;
+  ;; From Jason
+  ;;
+
+  (define-language M
+    [e ::= natural])
+
+  (define-metafunction* M
+    leaf : e -> e
+    [(leaf e) 0])
+
+  (define-metafunction* M #:parameters ([current-leaf leaf])
+    middle : e -> e
+    [(middle e) (current-leaf e)])
+
+  (define-metafunction* M #:parameters ([current-middle middle])
+    before : e -> e
+    [(before e) (current-middle e)])
+
+  (define-extended-metafunction* leaf M
+    new-leaf : e -> e
+    [(new-leaf e) 1])
+
+  (define-metafunction* M #:parameters ([current-leaf leaf])
+    direct : e -> e
+    [(direct e) (current-leaf e)])
+
+  (define-metafunction* M #:parameters ([current-middle middle])
+    after : e -> e
+    [(after e) (current-middle e)])
+
+  (chk
+   (term (direct 42)) 1
+   (term (after 42)) 1
    ))
