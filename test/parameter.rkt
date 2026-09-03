@@ -124,6 +124,65 @@
    )
 
   ;;
+  ;; Extended Bases
+  ;;
+
+  (define-language B0
+    [e ::= natural])
+
+  (define-language B1
+    [e ::= natural string])
+
+  (define-language B2
+    [e ::= natural string boolean])
+
+  (define-metafunction* B0
+    base-leaf : e -> e
+    [(base-leaf e) 0])
+
+  (define-metafunction* B0 #:parameters ([current-leaf base-leaf])
+    base-mf : e -> e
+    [(base-mf e) (current-leaf e)])
+
+  (define-reduction-relation* base-rr
+    B0
+    #:parameters ([current-leaf base-leaf])
+    [--> e (current-leaf e)])
+
+  (define-judgment-form* B0
+    #:parameters ([current-leaf base-leaf])
+    #:mode (base-jf I O)
+    [(base-jf e (current-leaf e))])
+
+  (define-extended-metafunction* base-mf B1
+    middle-mf : e -> e
+    [(middle-mf "middle") "middle"])
+
+  (define-extended-reduction-relation* middle-rr base-rr B1)
+
+  (define-extended-judgment-form* base-jf B1
+    #:mode (middle-jf I O))
+
+  (define-extended-metafunction* base-leaf B2
+    final-leaf : e -> e
+    [(final-leaf e) 1])
+
+  (define-extended-metafunction* middle-mf B2
+    final-mf : e -> e
+    [(final-mf #t) #t])
+
+  (define-extended-reduction-relation* final-rr middle-rr B2)
+
+  (define-extended-judgment-form* middle-jf B2
+    #:mode (final-jf I O))
+
+  (chk
+   (term (final-mf 42)) 1
+   (apply-reduction-relation final-rr (term 42)) '(1)
+   (judgment-holds (final-jf 42 e) e) '(1)
+   )
+
+  ;;
   ;; From Jason
   ;;
 

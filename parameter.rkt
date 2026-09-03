@@ -81,14 +81,23 @@
   ;; (with the scope attached) as well as the definition itself, at the provided
   ;; language.
   (define ((redex-obj-maker who name base params vals defn) sc lang)
-    (define param-stx (make-params params vals sc lang))
     (define defn* (sc defn))
+    (define base-stx
+      (if (and (syntax? base) (syntax-e base))
+          (list (cons (replace-context defn* #'*BASE*)
+                      (lang-automatic-lift base lang)))
+          null))
+    (define param-stx (make-params params vals sc lang))
     (with-syntax ([?lang (replace-context defn* #'*LANG*)]
+                  [([?base ?base* ?base-lift] ...) base-stx]
                   [([?param ?val ?lift] ...) param-stx])
       (values (sc name)
               #`(begin
+                  ?base-lift ...
                   ?lift ...
                   (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
+                                        [?base (make-rename-transformer #'?base*)]
+                                        ...
                                         [?param (make-rename-transformer #'?val)]
                                         ...)
                     #,defn*)))))
@@ -212,8 +221,6 @@
 (define-syntax (define-extended-reduction-relation* stx)
   (syntax-parse stx
     [(?who:id ?name:id ?base:id ?lang:id ?p:params ?more ...)
-     #:with [?base* ?defn-base] (lift #'?base #'?lang)
-     #:with ?defn-form
      (redex-obj-syntax #'?who
                        #'?name
                        #'?base
@@ -221,8 +228,7 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-reduction-relation ?name
-                           ?base* *LANG* ?more ...))
-     #`(begin ?defn-base ?defn-form)]))
+                           *BASE* *LANG* ?more ...))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; metafunction
@@ -245,8 +251,6 @@
 (define-syntax (define-extended-metafunction* stx)
   (syntax-parse stx
     [(?who:id ?base:id ?lang:id ?p:params ?name:id ?more ...)
-     #:with [?base* ?defn-base] (lift #'?base #'?lang)
-     #:with ?defn-form
      (redex-obj-syntax #'?who
                        #'?name
                        #'?base
@@ -254,8 +258,7 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-metafunction
-                           ?base* *LANG* ?name ?more ...))
-     #`(begin ?defn-base ?defn-form)]))
+                           *BASE* *LANG* ?name ?more ...))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; judgment form
@@ -277,8 +280,6 @@
   (syntax-parse stx
     [(?who:id ?base:id ?lang:id #:mode ?m:mode ?p:params ?more ...)
      #:with ?name #'?m.name
-     #:with [?base* ?defn-base] (lift #'?base #'?lang)
-     #:with ?defn-form
      (redex-obj-syntax #'?who
                        #'?name
                        #'?base
@@ -286,5 +287,4 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-judgment-form
-                           *LANG* ?base* #:mode ?m ?more ...))
-     #`(begin ?defn-base ?defn-form)]))
+                           *LANG* *BASE* #:mode ?m ?more ...))]))
