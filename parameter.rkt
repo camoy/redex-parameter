@@ -187,13 +187,22 @@
       (raise-syntax-error #f MSG id))
     obj)
 
+  ;; Redex-Obj → Syntax
+  ;; Returns the base stored when the object was defined.
+  (define (redex-obj-base obj)
+    (match (redex-obj-args obj)
+      [(list _ _ base _ _ _) base]))
+
   ;; Identifier Identifier Identifier → Any
-  ;; Register an explicit semantic definition and advance its language's
-  ;; generation, invalidating memoized automatic lifts for that language.
+  ;; Register an explicit semantic definition with all its bases and advance
+  ;; its language's generation, invalidating memoized automatic lifts.
   (define (redex-obj-add-ext! name base lang)
     (when (syntax-e base)
-      (define exts (redex-obj-exts (redex-obj-get base)))
-      (free-id-table-set! exts lang name)
+      (let loop ([base base])
+        (when (syntax-e base)
+          (define obj (redex-obj-get base))
+          (free-id-table-set! (redex-obj-exts obj) lang name)
+          (loop (redex-obj-base obj))))
       (advance-language-generation! lang)))
   )
 

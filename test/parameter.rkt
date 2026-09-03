@@ -183,6 +183,33 @@
    )
 
   ;;
+  ;; Ancestor Extensions
+  ;;
+
+  (define-language A
+    [e ::= natural])
+
+  (define-metafunction* A
+    root : e -> e
+    [(root e) 0])
+
+  (define-extended-metafunction* root A
+    child : e -> e
+    [(child e) 1])
+
+  (define-extended-metafunction* child A
+    grandchild : e -> e
+    [(grandchild e) 2])
+
+  (define-metafunction* A #:parameters ([current-root root])
+    through-root : e -> e
+    [(through-root e) (current-root e)])
+
+  (chk
+   (term (through-root 42)) 2
+   )
+
+  ;;
   ;; From Jason
   ;;
 
