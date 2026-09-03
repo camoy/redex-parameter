@@ -48,11 +48,31 @@
 ;; redex object
 
 (begin-for-syntax
+  ;; An Automatic-Lift is a memoized expansion artifact containing its generated
+  ;; identifier and the language generation under which it was built.
+  (struct automatic-lift (id generation))
+
   ;; A Redex-Obj is a rename trasformer struct where
   ;;   [id : Identifier] is the defined identifier,
   ;;   [args : [Listof Syntax]] is the syntaxes needed for the maker,
-  ;;   [exts : [Free-Id-Table Identifier]] maps languages to extensions.
-  (struct redex-obj (id args exts) #:property prop:rename-transformer 0)
+  ;;   [exts : [Free-Id-Table Identifier]] maps languages to explicit semantic
+  ;;     definitions, and
+  ;;   [lifts : [Free-Id-Table Automatic-Lift]] maps languages to memoized
+  ;;     automatic expansion artifacts.
+  (struct redex-obj (id args exts lifts) #:property prop:rename-transformer 0)
+
+  ;; Maps each language to the generation of its explicit semantic definitions.
+  (define language-generations (make-free-id-table))
+
+  ;; Identifier → Natural
+  (define (language-generation lang)
+    (free-id-table-ref language-generations lang (λ _ 0)))
+
+  ;; Identifier → Any
+  (define (advance-language-generation! lang)
+    (free-id-table-set! language-generations
+                        lang
+                        (add1 (language-generation lang))))
 
   ;; Identifier Identifier Syntax Syntax Syntax →
   ;;   (Procedure Identifier → Identifier Syntax)
@@ -61,14 +81,23 @@
   ;; (with the scope attached) as well as the definition itself, at the provided
   ;; language.
   (define ((redex-obj-maker who name base params vals defn) sc lang)
-    (define param-stx (make-params params vals sc lang))
     (define defn* (sc defn))
+    (define base-stx
+      (if (and (syntax? base) (syntax-e base))
+          (list (cons (replace-context defn* #'*BASE*)
+                      (lang-automatic-lift base lang)))
+          null))
+    (define param-stx (make-params params vals sc lang))
     (with-syntax ([?lang (replace-context defn* #'*LANG*)]
+                  [([?base ?base* ?base-lift] ...) base-stx]
                   [([?param ?val ?lift] ...) param-stx])
       (values (sc name)
               #`(begin
+                  ?base-lift ...
                   ?lift ...
                   (splicing-let-syntax ([?lang (make-rename-transformer #'#,lang)]
+                                        [?base (make-rename-transformer #'?base*)]
+                                        ...
                                         [?param (make-rename-transformer #'?val)]
                                         ...)
                     #,defn*)))))
@@ -92,6 +121,7 @@
                            #'#,params
                            #'#,vals
                            #'((... ...) #,defn))
+                     (make-free-id-table)
                      (make-free-id-table)))
         (begin-for-syntax
           (redex-obj-add-ext! #'#,name #'#,base #'#,lang))))
@@ -103,14 +133,14 @@
 
   ;; Procedure Identifier Syntax Syntax → [List Identifier Identifier Syntax]
   ;; Retrieves the list of the parameter, value for that parameter, and
-  ;; definition; they are up to date for `lang`. This will either retrieve
-  ;; an extension, or lift the value.
+  ;; definition; they are up to date for `lang`. Explicit semantic definitions
+  ;; take precedence over memoized automatic lifts.
   (define (make-params params vals sc lang)
     (for/list ([param (in-syntax params)]
                [val (in-syntax vals)])
       (cons (sc param)
             (or (lang-extension val lang)
-                (lift val lang)))))
+                (lang-automatic-lift val lang)))))
 
   ;; Identifier Identifier → [Or #f [List Identifier Syntax]]
   ;; If defined, returns the identifier for a user-defined extension.
@@ -118,6 +148,23 @@
     (define exts (redex-obj-exts (redex-obj-get val)))
     (define val* (free-id-table-ref exts lang (λ _ #f)))
     (and val* (list val* #'(void))))
+
+  ;; Identifier Identifier → [List Identifier Syntax]
+  ;; Reuses a memoized automatic lift when it was built under the current
+  ;; language generation; otherwise rebuilds and caches it.
+  (define (lang-automatic-lift val lang)
+    (define lifts (redex-obj-lifts (redex-obj-get val)))
+    (define generation (language-generation lang))
+    (define cached (free-id-table-ref lifts lang (λ _ #f)))
+    (cond
+      [(and cached (= (automatic-lift-generation cached) generation))
+       (list (automatic-lift-id cached) #'(void))]
+      [else
+       (define result (lift val lang))
+       (free-id-table-set! lifts
+                           lang
+                           (automatic-lift (car result) generation))
+       result]))
 
   ;; Identifier Identifier → [List Identifier Syntax]
   ;; Returns the syntax needed to lift the value to this language.
@@ -140,12 +187,23 @@
       (raise-syntax-error #f MSG id))
     obj)
 
+  ;; Redex-Obj → Syntax
+  ;; Returns the base stored when the object was defined.
+  (define (redex-obj-base obj)
+    (match (redex-obj-args obj)
+      [(list _ _ base _ _ _) base]))
+
   ;; Identifier Identifier Identifier → Any
-  ;; Register an extension with the base's internal extension table.
+  ;; Register an explicit semantic definition with all its bases and advance
+  ;; its language's generation, invalidating memoized automatic lifts.
   (define (redex-obj-add-ext! name base lang)
     (when (syntax-e base)
-      (define exts (redex-obj-exts (redex-obj-get base)))
-      (free-id-table-set! exts lang name)))
+      (let loop ([base base])
+        (when (syntax-e base)
+          (define obj (redex-obj-get base))
+          (free-id-table-set! (redex-obj-exts obj) lang name)
+          (loop (redex-obj-base obj))))
+      (advance-language-generation! lang)))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -172,8 +230,6 @@
 (define-syntax (define-extended-reduction-relation* stx)
   (syntax-parse stx
     [(?who:id ?name:id ?base:id ?lang:id ?p:params ?more ...)
-     #:with [?base* ?defn-base] (lift #'?base #'?lang)
-     #:with ?defn-form
      (redex-obj-syntax #'?who
                        #'?name
                        #'?base
@@ -181,8 +237,7 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-reduction-relation ?name
-                           ?base* *LANG* ?more ...))
-     #`(begin ?defn-base ?defn-form)]))
+                           *BASE* *LANG* ?more ...))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; metafunction
@@ -205,8 +260,6 @@
 (define-syntax (define-extended-metafunction* stx)
   (syntax-parse stx
     [(?who:id ?base:id ?lang:id ?p:params ?name:id ?more ...)
-     #:with [?base* ?defn-base] (lift #'?base #'?lang)
-     #:with ?defn-form
      (redex-obj-syntax #'?who
                        #'?name
                        #'?base
@@ -214,8 +267,7 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-metafunction
-                           ?base* *LANG* ?name ?more ...))
-     #`(begin ?defn-base ?defn-form)]))
+                           *BASE* *LANG* ?name ?more ...))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; judgment form
@@ -237,8 +289,6 @@
   (syntax-parse stx
     [(?who:id ?base:id ?lang:id #:mode ?m:mode ?p:params ?more ...)
      #:with ?name #'?m.name
-     #:with [?base* ?defn-base] (lift #'?base #'?lang)
-     #:with ?defn-form
      (redex-obj-syntax #'?who
                        #'?name
                        #'?base
@@ -246,5 +296,4 @@
                        #'(?p.param ...)
                        #'(?p.val ...)
                        #'(define-extended-judgment-form
-                           *LANG* ?base* #:mode ?m ?more ...))
-     #`(begin ?defn-base ?defn-form)]))
+                           *LANG* *BASE* #:mode ?m ?more ...))]))
